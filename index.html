@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real Estate Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" />
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <h2>Real Estate Map - Add Units</h2>
+
+    <!-- Map Display -->
+    <div id="map-container"> 
+        <div id="map"></div>
+        <button id="toggleNavMenu" class="toggle-nav-button">
+            <i class="fas fa-bars"></i>
+        </button>
+        <div id="navigationMenu" class="collapsed">
+            <!-- Navigation buttons will be inserted here -->
+        </div>
+    </div>
+    
+    <!-- Units List with updated structure -->
+    <div class="units-section">
+        <h3>Added Units</h3>
+        <ul id="unitList"></ul>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
