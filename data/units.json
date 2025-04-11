@@ -1,0 +1,17 @@
+[
+  {
+    "name": "U02",
+    "buildingName": "B1 - G17 - BB26",
+    "type": "Single",
+    "area": "200",
+    "price": "10000000",
+    "availability": "not-available",
+    "position": {
+      "lat": 328.149169921875,
+      "lng": 373.75
+    },
+    "created_at": "2025-04-11T10:39:42.315689",
+    "id": "unit_1",
+    "updated_at": "2025-04-11T10:41:21.177241"
+  }
+]

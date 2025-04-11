@@ -1,0 +1,927 @@
+// Search Frame Component - REMOVE THIS INITIAL EVENT LISTENER
+// document.getElementById('toggleNavMenu').addEventListener('click', function() {
+//     const navMenu = document.getElementById('navigationMenu');
+//     navMenu.classList.toggle('collapsed');
+// });
+
+// Utility functions
+function debounce(func, wait) {
+    let timeout;
+    return function(...args) {
+        const context = this;
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(context, args), wait);
+    };
+}
+
+// Initialize data structures 
+const units = [];
+const markers = [];
+const groups = [];
+const buildings = [];
+const sectors = [];
+const unitMarkers = new Map();
+const groupSummaryMarkers = new Map();
+let currentIndicator;
+const CLUSTER_ZOOM_THRESHOLD = 3;
+
+// Navigation positions dictionary
+const navigationPoints = {
+    'Main Entrance': { latlng: [0,0], label: 'Re-center map' },
+    // Add more positions as needed
+};
+
+// Initialize the map first
+const map = L.map('map', {
+    crs: L.CRS.Simple,
+    minZoom: 1,
+    maxZoom: 6,
+    zoom: 2,
+    zoomSnap: 0.25,
+    zoomDelta: 0.5
+});
+
+const bounds = [[0, 0], [500, 800]]; // Adjust to the image dimensions
+L.imageOverlay('map.jpg', bounds).addTo(map);
+map.fitBounds(bounds);
+
+// Initialize DOM elements
+const unitForm = document.getElementById('unitForm');
+const unitList = document.getElementById('unitList');
+
+// Improved initialization function
+function initializeApp() {
+    console.log("Initializing app...");
+    
+    // Initialize basic UI functionality
+    const toggleNavButton = document.getElementById('toggleNavMenu');
+    const navMenu = document.getElementById('navigationMenu');
+    
+    if (toggleNavButton && navMenu) {
+        toggleNavButton.addEventListener('click', function() {
+            console.log("Toggle button clicked");
+            navMenu.classList.toggle('collapsed');
+        });
+    } else {
+        console.error("Navigation menu elements not found:", { toggleNavButton, navMenu });
+    }
+
+    // Initialize navigation
+    renderNavigationMenu();
+    
+    // Set up initial marker visibility
+    setTimeout(() => {
+        updateMarkerVisibility();
+    }, 500);
+    
+    // Set up zoom change handler
+    map.off('zoomend'); // Remove any existing handlers
+    map.on('zoomend', debounce(updateMarkerVisibility, 150));
+    
+    // Initialize search if available
+    if (typeof initializeSearch === 'function') {
+        initializeSearch();
+    }
+    
+    console.log("App initialization complete");
+}
+
+// Run initialization when DOM is loaded
+document.addEventListener('DOMContentLoaded', initializeApp);
+
+// Splash Screen Handler
+document.addEventListener('DOMContentLoaded', function() {
+    const splashScreen = document.getElementById('splashScreen');
+    
+    // Hide splash screen after 4 seconds
+    if (splashScreen) {
+        setTimeout(() => {
+            splashScreen.style.display = 'none';
+        }, 4000);
+    }
+});
+
+// Add navigation positions dictionary
+const navigationPoints = {
+    'Main Entrance': { latlng: [0,0], label: 'Re-center map' },
+    // Add more positions as needed
+};
+
+// Add to Navigation function
+window.addToNavigation = function(name, lat, lng, isSector = false) {
+    // Add the point to navigation points
+    navigationPoints[name] = {
+        latlng: [lat, lng],
+        label: name,
+        isSector: isSector
+    };
+    
+    // Update the navigation menu
+    renderNavigationMenu();
+    map.closePopup();
+    showNotification('Added to quick navigation', 'success');
+};
+
+// Update the navigation points rendering function
+function renderNavigationMenu() {
+    const navigationMenu = document.getElementById('navigationMenu');
+    if (!navigationMenu) return;
+
+    navigationMenu.innerHTML = `
+        <div class="search-container">
+            <input 
+                type="text" 
+                id="navSearch" 
+                placeholder="Search locations..." 
+                class="search-input"
+            >
+            <i class="fas fa-search search-icon"></i>
+        </div>
+        <div class="nav-buttons">
+            ${Object.entries(navigationPoints).map(([name, point]) => `
+                <button onclick="navigateTo('${name}')" class="nav-button ${point.isSector ? 'sector' : ''}">
+                    <i class="fas fa-${point.isSector ? 'draw-polygon' : 'map-marker-alt'}"></i> 
+                    ${name}
+                </button>
+            `).join('')}
+        </div>
+    `;
+
+    // Add search functionality
+    const searchInput = document.getElementById('navSearch');
+    if (searchInput) {
+    searchInput.addEventListener('input', function(e) {
+        const searchTerm = e.target.value.toLowerCase();
+        const buttons = document.querySelectorAll('.nav-button');
+        
+        buttons.forEach(button => {
+            const text = button.textContent.toLowerCase();
+                button.style.display = text.includes(searchTerm) ? 'flex' : 'none';
+        });
+    });
+    }
+}
+
+// Function to show the add navigation form
+window.showAddNavigationForm = function() {
+    navigationMenu.innerHTML = `
+        <div class="nav-form">
+            <h4>Add Navigation Point</h4>
+            <input type="text" id="navPointName" placeholder="Point Name" required>
+            <p class="nav-instruction">Click on the map to set position</p>
+            <div class="nav-form-buttons">
+                <button onclick="cancelNavigation()" class="cancel-button">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+            </div>
+        </div>
+    `;
+    
+    // Reset map zoom to make selection easier
+    map.setZoom(1);
+    
+    // Add one-time click listener to the map
+    map.once('click', function(e) {
+        const pointName = document.getElementById('navPointName').value;
+        if (pointName.trim() !== '') {
+            navigationPoints[pointName] = {
+                latlng: [e.latlng.lat, e.latlng.lng],
+                label: pointName
+            };
+            
+            // Show success message
+            navigationMenu.innerHTML += `
+                <div class="success-message">
+                    Position set successfully!
+                </div>
+            `;
+            
+            // Return to normal navigation menu after short delay
+            setTimeout(() => {
+                renderNavigationMenu();
+            }, 1500);
+        }
+    });
+}
+
+// Function to cancel navigation point addition
+window.cancelNavigation = function() {
+    renderNavigationMenu();
+}
+
+// Initialize the navigation menu
+renderNavigationMenu();
+
+// Add groups and buildings storage
+let groups = [];
+let buildings = [];
+
+// Add sectors storage
+let sectors = [];
+
+// Modify double-click handler to include sectors
+map.on('dblclick', function(e) {
+    e.originalEvent.preventDefault();
+    
+    const selectionPopup = L.popup({
+        className: 'selection-popup'
+    })
+    .setLatLng(e.latlng)
+    .setContent(`
+        <div class="selection-form">
+            <h4>What would you like to add?</h4>
+            <div class="selection-buttons">
+                <button onclick="showSectorForm(${e.latlng.lat}, ${e.latlng.lng})" class="select-btn">
+                    <i class="fas fa-draw-polygon"></i> Sector
+                </button>
+                <button onclick="showGroupForm(${e.latlng.lat}, ${e.latlng.lng})" class="select-btn">
+                    <i class="fas fa-layer-group"></i> Group
+                </button>
+                <button onclick="showBuildingForm(${e.latlng.lat}, ${e.latlng.lng})" class="select-btn">
+                    <i class="fas fa-building"></i> Building
+                </button>
+                <button onclick="showUnitForm(${e.latlng.lat}, ${e.latlng.lng})" class="select-btn">
+                    <i class="fas fa-home"></i> Unit
+                </button>
+            </div>
+        </div>
+    `)
+    .openOn(map);
+});
+
+// Sector Form
+window.showSectorForm = function(lat, lng) {
+    map.closePopup();
+    const popup = L.popup({
+        className: 'sector-creation-popup'
+    })
+    .setLatLng([lat, lng])
+    .setContent(`
+        <div class="popup-form">
+            <h4>Add New Sector</h4>
+            <div class="popup-form-group">
+                <input type="text" id="sectorName" placeholder="Sector Name" required>
+            </div>
+            <div class="popup-form-buttons">
+                <button onclick="createSector(${lat}, ${lng})" class="create-btn">
+                    <i class="fas fa-plus"></i> Create
+                </button>
+                <button onclick="closePopup()" class="cancel-btn">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+            </div>
+        </div>
+    `)
+    .openOn(map);
+};
+
+// Group Form
+window.showGroupForm = function(lat, lng) {
+    map.closePopup();
+    
+    // Check if there are any sectors first
+    if (sectors.length === 0) {
+        showNotification('Please create a sector first', 'error');
+        return;
+    }
+
+    // Get all sectors that contain this point
+    const availableSectors = sectors.filter(sector => {
+        const distance = map.distance(
+            [lat, lng],
+            [sector.position.lat, sector.position.lng]
+        );
+        return true; // Since we removed radius check, all sectors are valid
+    });
+
+    if (availableSectors.length === 0) {
+        showNotification('This location is not within any sector', 'error');
+        return;
+    }
+
+    const popup = L.popup({
+        className: 'group-creation-popup'
+    })
+    .setLatLng([lat, lng])
+    .setContent(`
+        <div class="popup-form">
+            <h4>Add New Group</h4>
+            <div class="popup-form-group">
+                <select id="groupSector" required>
+                    <option value="">Select Sector</option>
+                    ${availableSectors.map(sector => 
+                        `<option value="${sector.name}">${sector.name}</option>`
+                    ).join('')}
+                </select>
+            </div>
+            <div class="popup-form-group">
+                <input type="text" id="groupName" placeholder="Group Name" required>
+            </div>
+            <div class="popup-form-buttons">
+                <button onclick="createGroup(${lat}, ${lng})" class="create-btn">
+                    <i class="fas fa-plus"></i> Create
+                </button>
+                <button onclick="closePopup()" class="cancel-btn">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+            </div>
+        </div>
+    `)
+    .openOn(map);
+};
+
+// Building Form
+window.showBuildingForm = function(lat, lng) {
+    map.closePopup();
+    
+    // Only show groups that exist
+    const groupOptions = groups.map(group => 
+        `<option value="${group.name}">${group.name}</option>`
+    ).join('');
+    
+    if (!groupOptions) {
+        showNotification('Please create a group first', 'error');
+        return;
+    }
+
+    const popup = L.popup({
+        className: 'building-creation-popup'
+    })
+    .setLatLng([lat, lng])
+    .setContent(`
+        <div class="popup-form">
+            <h4>Add New Building</h4>
+            <div class="popup-form-group">
+                <select id="buildingGroup" required>
+                    <option value="">Select Group</option>
+                    ${groupOptions}
+                </select>
+            </div>
+            <div class="popup-form-group">
+                <input type="text" id="buildingName" placeholder="Building Name" required>
+            </div>
+            <div class="popup-form-buttons">
+                <button onclick="createBuilding(${lat}, ${lng})" class="create-btn">
+                    <i class="fas fa-plus"></i> Create
+                </button>
+                <button onclick="closePopup()" class="cancel-btn">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+            </div>
+        </div>
+    `)
+    .openOn(map);
+};
+
+// Unit Form (Modified)
+window.showUnitForm = function(lat, lng) {
+    map.closePopup();
+    
+    // Get all buildings
+    const buildingOptions = buildings.map(building => 
+        `<option value="${building.name}">${building.name}</option>`
+    ).join('');
+    
+    if (!buildingOptions) {
+        showNotification('Please create a building first', 'error');
+        return;
+    }
+
+    const popup = L.popup({
+        className: 'unit-creation-popup'
+    })
+    .setLatLng([lat, lng])
+    .setContent(`
+        <div class="popup-form">
+            <h4>Add New Unit</h4>
+            <div class="popup-form-group">
+                <select id="unitBuilding" required>
+                    <option value="">Select Building</option>
+                    ${buildingOptions}
+                </select>
+            </div>
+            <div class="popup-form-group">
+                <input type="text" id="popupUnitName" placeholder="Unit Name" required>
+            </div>
+            <div class="popup-form-group">
+                <input type="number" id="popupUnitPrice" placeholder="Unit Price" required>
+            </div>
+            <div class="popup-form-group">
+                <input type="number" id="popupUnitArea" placeholder="Unit Area (m²)" required>
+            </div>
+            <div class="popup-form-group">
+                <input type="text" id="popupUnitType" placeholder="Unit Type" required>
+            </div>
+            <div class="popup-form-group availability-toggle">
+                <label for="popupUnitAvailability">Availability:</label>
+                <select id="popupUnitAvailability">
+                    <option value="available">Available</option>
+                    <option value="not-available">Not Available</option>
+                </select>
+            </div>
+            <div class="popup-form-buttons">
+                <button onclick="createUnit(${lat}, ${lng})" class="create-btn">
+                    <i class="fas fa-plus"></i> Create
+                </button>
+                <button onclick="closePopup()" class="cancel-btn">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+            </div>
+        </div>
+    `)
+    .openOn(map);
+};
+
+// Create Group
+window.createGroup = function(lat, lng) {
+    const sectorName = document.getElementById('groupSector').value;
+    const groupName = document.getElementById('groupName').value;
+    
+    if (!sectorName || !groupName) {
+        showNotification('Please fill all fields', 'error');
+        return;
+    }
+
+    // Create full name with sector prefix
+    const fullName = `${sectorName} - ${groupName}`;
+
+    // Add group with sector reference and full name
+    groups.push({
+        name: fullName,
+        sectorName,
+        position: { lat, lng }
+    });
+
+    // Close the creation popup
+    map.closePopup();
+
+    // Show navigation suggestion popup
+    const addToNavPopup = L.popup({
+        className: 'nav-question-popup'
+    })
+    .setLatLng([lat, lng])
+    .setContent(`
+        <div class="popup-form">
+            <h4>Add to Quick Navigation?</h4>
+            <div class="popup-form-buttons">
+                <button onclick="addToNavigation('${fullName}', ${lat}, ${lng})" class="create-btn">
+                    <i class="fas fa-check"></i> Yes
+                </button>
+                <button onclick="closePopup()" class="cancel-btn">
+                    <i class="fas fa-times"></i> No
+                </button>
+            </div>
+        </div>
+    `)
+    .openOn(map);
+
+    showNotification('Group created successfully', 'success');
+};
+
+// Create Building
+window.createBuilding = function(lat, lng) {
+    const groupName = document.getElementById('buildingGroup').value;
+    const buildingName = document.getElementById('buildingName').value;
+    
+    if (!groupName || !buildingName) {
+        showNotification('Please fill all fields', 'error');
+        return;
+    }
+
+    const fullName = `${groupName} - ${buildingName}`;
+    
+    // Add building
+    buildings.push({
+        name: fullName,
+        groupName,
+        position: { lat, lng }
+    });
+
+    showNotification('Building created successfully', 'success');
+    map.closePopup();
+};
+
+// Add these variables at the top level with other declarations
+let unitMarkers = new Map(); // Changed from object to Map for better key management
+let groupSummaryMarkers = new Map(); // Changed from object to Map
+const CLUSTER_ZOOM_THRESHOLD = 3;
+
+// Improved marker visibility management system
+function updateMarkerVisibility() {
+    const currentZoom = map.getZoom();
+    
+    // Clear any in-progress transitions
+    if (window._visibilityTimeout) {
+        clearTimeout(window._visibilityTimeout);
+    }
+    
+    if (currentZoom <= CLUSTER_ZOOM_THRESHOLD) {
+        removeGroupSummaries(); // Remove any existing summaries first
+        processLowZoom();
+    } else {
+        removeGroupSummaries();
+        processHighZoom();
+    }
+}
+
+function processLowZoom() {
+    // Step 1: Hide all unit markers by iterating over our unitMarkers Map
+    for (const [name, marker] of unitMarkers.entries()) {
+        marker.setOpacity(0);
+    }
+    
+    // Step 2: Create group summary markers
+    setTimeout(() => {
+        createGroupSummaries();
+    }, 50);
+}
+
+function processHighZoom() {
+    // Step 1: Remove all group summary markers
+    removeGroupSummaries();
+    
+    // Step 2: Show individual unit markers
+    window._visibilityTimeout = setTimeout(() => {
+        for (const [name, marker] of unitMarkers.entries()) {
+            const unit = units.find(u => u.name === name);
+            if (unit && unit.availability === 'available') {
+                marker.setOpacity(1);
+            } else if (unit) {
+                marker.setOpacity(0.7); // Semi-transparent for non-available units
+            }
+        }
+    }, 50);
+}
+
+function removeGroupSummaries() {
+    // Remove all group summary markers
+    for (const [groupName, marker] of groupSummaryMarkers.entries()) {
+        map.removeLayer(marker);
+    }
+    groupSummaryMarkers.clear();
+}
+
+function createGroupSummaries() {
+    // Create stats object to track counts
+    const groupStats = {};
+    
+    // Initialize counts for all groups
+    groups.forEach(group => {
+        groupStats[group.name] = {
+            available: 0,
+            notAvailable: 0,
+            position: group.position
+        };
+    });
+    
+    // Count units by availability for each group
+    units.forEach(unit => {
+        // Find which group this unit belongs to
+        const building = buildings.find(b => b.name === unit.buildingName);
+        if (building && building.groupName) {
+            const groupName = building.groupName;
+            
+            // Make sure the group exists in our stats
+            if (groupStats[groupName]) {
+                // Increment the appropriate counter
+                if (unit.availability === 'available') {
+                    groupStats[groupName].available++;
+                } else if (unit.availability === 'not-available') {
+                    groupStats[groupName].notAvailable++;
+                }
+            }
+        }
+    });
+    
+    // Create a marker for each group that has units
+    Object.entries(groupStats).forEach(([groupName, stats]) => {
+        // Only create a marker if the group has any units and a valid position
+        const totalUnits = stats.available + stats.notAvailable;
+        if (totalUnits > 0 && stats.position) {
+            // Create the marker
+            const marker = L.marker([stats.position.lat, stats.position.lng], {
+                icon: L.divIcon({
+                    html: `
+                        <div class="group-summary-marker">
+                            <div class="group-summary-header">${groupName.split(' - ')[1] || groupName}</div>
+                            <div class="group-summary-counts">
+                                <span class="available-count">${stats.available} ✓</span>
+                                <span class="not-available-count">${stats.notAvailable} ✗</span>
+                            </div>
+                        </div>
+                    `,
+                    className: 'group-summary-icon',
+                    iconSize: [100, 50],
+                    iconAnchor: [50, 25]
+                })
+            }).addTo(map);
+            
+            // Store the marker in our Map
+            groupSummaryMarkers.set(groupName, marker);
+            
+            // Add click handler to zoom in
+            marker.on('click', () => {
+                map.flyTo([stats.position.lat, stats.position.lng], CLUSTER_ZOOM_THRESHOLD + 1, {
+                    animate: true,
+                    duration: 1
+                });
+            });
+        }
+    });
+}
+
+// Update the createUnit function to set initial visibility
+window.createUnit = function(lat, lng) {
+    const buildingName = document.getElementById('unitBuilding').value;
+    const name = document.getElementById('popupUnitName').value;
+    const price = document.getElementById('popupUnitPrice').value;
+    const area = document.getElementById('popupUnitArea').value;
+    const type = document.getElementById('popupUnitType').value;
+    const availability = document.getElementById('popupUnitAvailability').value;
+
+    if (!buildingName || !name || !price || !area || !type) {
+        showNotification('Please fill all fields', 'error');
+        return;
+    }
+
+    // Create marker
+    const marker = L.marker([lat, lng], {
+        icon: L.divIcon({
+            html: `
+                <div class="unit-marker ${availability}">
+                    <span class="unit-label">${name}</span>
+                </div>`,
+            className: 'custom-marker',
+            iconSize: [30, 30],
+            iconAnchor: [15, 15],
+            popupAnchor: [0, -15]
+        }),
+    }).addTo(map);
+
+    // Store marker in our Map for easier management
+    unitMarkers.set(name, marker);
+
+    // Set initial visibility based on current zoom
+    if (map.getZoom() <= CLUSTER_ZOOM_THRESHOLD) {
+        marker.setOpacity(0); // Hide if we're at low zoom
+    }
+
+    // Update popup content
+    marker.bindPopup(`
+        <div class="unit-popup">
+            <h3>${name}</h3>
+            <div class="popup-details">
+                <p><i class="fas fa-building"></i> ${buildingName}</p>
+                <p><i class="fas fa-home"></i> ${type}</p>
+                <p><i class="fas fa-ruler-combined"></i> ${area} m²</p>
+                <p><i class="fas fa-tag"></i> $${Number(price).toLocaleString()}</p>
+                <p><i class="fas fa-check-circle"></i> Status: <span class="status-${availability}">${availability.charAt(0).toUpperCase() + availability.slice(1)}</span></p>
+            </div>
+            <button onclick="showUnitDetails('${name}', ${lat}, ${lng})" class="details-btn">
+                View Details
+            </button>
+        </div>
+    `);
+
+    // Store unit data
+    units.push({
+        name,
+        buildingName,
+        type,
+        area,
+        price,
+        availability,
+        position: { lat, lng }
+    });
+
+    showNotification('Unit created successfully', 'success');
+    map.closePopup();
+    
+    // Update visibility
+    updateMarkerVisibility();
+    if (window.updateSearchFilters) {
+        window.updateSearchFilters();
+    }
+};
+
+// We need to initialize this properly
+document.addEventListener('DOMContentLoaded', function() {
+    // Set a timer to ensure map is initialized
+    setTimeout(() => {
+        // Initialize marker visibility
+        updateMarkerVisibility();
+
+        // Set up proper zoom event handler with debounce
+        map.off('zoomend'); // Remove any existing handlers
+const debouncedUpdate = debounce(updateMarkerVisibility, 200);
+map.on('zoomend', debouncedUpdate);
+    }, 1000);
+});
+
+function renderUnitList() {
+    unitList.innerHTML = '';
+    units.forEach((unit, index) => {
+        const li = document.createElement('li');
+        li.innerHTML = `<strong>${unit.name}</strong> - ${unit.type}, $${unit.price} 
+            <button onclick="removeUnit(${index})">Remove</button>`;
+        unitList.appendChild(li);
+    });
+}
+
+window.removeUnit = function(index) {
+    const unit = units[index];
+    if (!unit) return;
+    
+    // Remove from units array
+    units.splice(index, 1);
+
+    // Find and remove the associated marker
+    const marker = unitMarkers.get(unit.name);
+    if (marker) {
+        map.removeLayer(marker);
+        unitMarkers.delete(unit.name);
+    }
+
+    // Update UI
+    renderUnitList();
+    
+    // Update visibility and search results
+    updateMarkerVisibility();
+    if (window.renderUnitCards) {
+        window.renderUnitCards();
+    }
+    
+    showNotification('Unit removed successfully', 'success');
+};
+
+// Navigation function
+window.navigateTo = function(pointName) {
+    const point = navigationPoints[pointName];
+    if (!point) return;
+
+        // Remove previous indicator if exists
+        if (currentIndicator) {
+            map.removeLayer(currentIndicator);
+        }
+        
+    // Find if it's a group
+        const isGroup = groups.some(group => group.name === pointName);
+        
+    // Set appropriate zoom level
+    const zoomLevel = isGroup ? 5 : 3;
+        
+        // Create indicator circle
+        currentIndicator = L.circle(point.latlng, {
+        color: isGroup ? '#3498db' : '#e74c3c',
+        fillColor: isGroup ? '#3498db' : '#e74c3c',
+            fillOpacity: 0.2,
+        radius: isGroup ? 40 : 20
+        }).addTo(map);
+        
+    // Center map with animation
+        map.flyTo(point.latlng, zoomLevel, {
+            animate: true,
+            duration: 1
+        });
+
+        // Add pulsing effect
+        setTimeout(() => {
+            currentIndicator.setStyle({
+                fillOpacity: 0.1,
+            radius: isGroup ? 60 : 30
+            });
+        }, 500);
+
+    showNotification(`Navigating to ${isGroup ? 'Group' : 'Location'}: ${pointName}`, 'success');
+};
+
+// إضافة نظام إشعارات
+function showNotification(message, type = 'success') {
+    const notification = document.createElement('div');
+    notification.className = `notification ${type}`;
+    notification.innerHTML = `
+        <i class="fas ${type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle'}"></i>
+        ${message}
+    `;
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.classList.add('show');
+        setTimeout(() => {
+            notification.classList.remove('show');
+            setTimeout(() => notification.remove(), 300);
+        }, 3000);
+    }, 100);
+}
+
+window.showUnitDetails = function(unitName, lat, lng) {
+    const unit = units.find(u => u.name === unitName && 
+                               u.position.lat === lat && 
+                               u.position.lng === lng);
+    if (!unit) return;
+
+    const modal = document.createElement('div');
+    modal.className = 'unit-modal';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>${unit.name}</h2>
+                <button onclick="this.closest('.unit-modal').remove()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="unit-info">
+                    <p><i class="fas fa-building"></i> Building: ${unit.buildingName}</p>
+                    <p><i class="fas fa-home"></i> Type: ${unit.type}</p>
+                    <p><i class="fas fa-ruler-combined"></i> Area: ${unit.area} m²</p>
+                    <p><i class="fas fa-tag"></i> Price: $${Number(unit.price).toLocaleString()}</p>
+                    <p><i class="fas fa-check-circle"></i> Status: <span class="status-${unit.availability}">${unit.availability.charAt(0).toUpperCase() + unit.availability.slice(1)}</span></p>
+                </div>
+                <div class="unit-actions">
+                    <button onclick="editUnit('${unit.name}', ${unit.position.lat}, ${unit.position.lng})" class="edit-btn">
+                        <i class="fas fa-edit"></i> Edit
+                    </button>
+                    <button onclick="deleteUnit('${unit.name}', ${unit.position.lat}, ${unit.position.lng})" class="delete-btn">
+                        <i class="fas fa-trash"></i> Delete
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+};
+
+// Edit Unit Function
+window.editUnit = function(unitName, lat, lng) {
+    const unit = units.find(u => u.name === unitName && 
+                               u.position.lat === lat && 
+                               u.position.lng === lng);
+    if (!unit) return;
+
+    // Close existing modal
+    document.querySelector('.unit-modal')?.remove();
+
+    const popup = L.popup({
+        className: 'unit-edit-popup'
+    })
+    .setLatLng(unit.position)
+    .setContent(`
+        <div class="popup-form">
+            <h4>Edit Unit</h4>
+            <div class="popup-form-group">
+                <select id="editUnitBuilding" required>
+                    ${buildings.map(building => `
+                        <option value="${building.name}" ${building.name === unit.buildingName ? 'selected' : ''}>
+                            ${building.name}
+                        </option>
+                    `).join('')}
+                </select>
+            </div>
+            <div class="popup-form-group">
+                <input type="text" id="editUnitName" value="${unit.name}" placeholder="Unit Name" required>
+            </div>
+            <div class="popup-form-group">
+                <input type="number" id="editUnitPrice" value="${unit.price}" placeholder="Unit Price" required>
+            </div>
+            <div class="popup-form-group">
+                <input type="number" id="editUnitArea" value="${unit.area}" placeholder="Unit Area (m²)" required>
+            </div>
+            <div class="popup-form-group">
+                <input type="text" id="editUnitType" value="${unit.type}" placeholder="Unit Type" required>
+            </div>
+            <div class="popup-form-group availability-toggle">
+                <label for="editUnitAvailability">Availability:</label>
+                <select id="editUnitAvailability">
+                    <option value="available" ${unit.availability === 'available' ? 'selected' : ''}>Available</option>
+                    <option value="not-available" ${unit.availability === 'not-available' ? 'selected' : ''}>Not Available</option>
+                </select>
+            </div>
+            <div class="popup-form-buttons">
+                <button onclick="saveUnitEdit('${unitName}', ${lat}, ${lng})" class="create-btn">
+                    <i class="fas fa-save"></i> Save
+                </button>
+                <button onclick="closePopup()" class="cancel-btn">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+            </div>
+        </div>
+    `)
+    .openOn(map);
+};
+
+// Move closePopup function definition before it's used
+window.closePopup = function() {
+    map.closePopup();
+};
+
+// Remove the sector marker styles
+const existingStyle = document.querySelector('style');
+if (existingStyle) {
+    existingStyle.remove();
+}
+
+const existingHighlightStyle = document.querySelector('style:last-of-type');
+if (existingHighlightStyle) {
+    existingHighlightStyle.remove();
+}

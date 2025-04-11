@@ -1,457 +1,247 @@
-// Search Frame Component
-document.getElementById('toggleNavMenu').addEventListener('click', function() {
-    const navMenu = document.getElementById('navigationMenu');
-    navMenu.classList.toggle('collapsed');
-});
-document.addEventListener('DOMContentLoaded', function() {
-    // Create search frame container
-    const searchFrameContainer = document.createElement('div');
-    searchFrameContainer.id = 'searchFrameContainer';
-    searchFrameContainer.className = 'search-frame-container';
-    
-    // Add search frame HTML
-    searchFrameContainer.innerHTML = `
-        <div class="search-frame">
-            <div class="search-filters">
-                <div class="filter-group">
-                    <label for="sectorFilter">Sector:</label>
-                    <select id="sectorFilter">
-                        <option value="">All Sectors</option>
-                    </select>
-                </div>
-                <div class="filter-group">
-                    <label for="groupFilter">Group:</label>
-                    <select id="groupFilter" disabled>
-                        <option value="">All Groups</option>
-                    </select>
-                </div>
-                <div class="filter-group">
-                    <label for="buildingFilter">Building:</label>
-                    <select id="buildingFilter" disabled>
-                        <option value="">All Buildings</option>
-                    </select>
-                </div>
-                <div class="filter-group range-filter">
-                    <label>Price Range:</label>
-                    <div class="range-inputs">
-                        <input type="number" id="minPrice" placeholder="Min Price" min="0">
-                        <span>to</span>
-                        <input type="number" id="maxPrice" placeholder="Max Price" min="0">
-                    </div>
-                </div>
-                <div class="filter-group range-filter">
-                    <label>Area Range (m²):</label>
-                    <div class="range-inputs">
-                        <input type="number" id="minArea" placeholder="Min Area" min="0">
-                        <span>to</span>
-                        <input type="number" id="maxArea" placeholder="Max Area" min="0">
-                    </div>
-                </div>
-                <button id="clearFilters" class="clear-filters-btn">
-                    <i class="fas fa-times"></i> Clear Filters
-                </button>
-            </div>
-            <div class="unit-grid-container">
-                <div id="unitGrid" class="unit-grid"></div>
-                <div id="noUnitsMessage" class="no-units-message" style="display: none;">
-                    <i class="fas fa-search"></i>
-                    <p>No units match your search criteria</p>
-                </div>
-            </div>
-        </div>
-    `;
-    
-    // Insert search frame after the map
-    const mapElement = document.getElementById('map');
-    mapElement.parentNode.insertBefore(searchFrameContainer, mapElement.nextSibling);
-    
-    // Initialize search functionality
-    initializeSearch();
+// Define the map image URL with error handling
+var mapImageUrl = 'map.jpg';
+
+// Add unique ID generator
+function generateId() {
+    return '_' + Math.random().toString(36).substr(2, 9);
+}
+
+// Initialize data structures
+// These variables should only be declared once
+var units = [];
+var markers = [];
+var groups = [];
+var buildings = [];
+var sectors = [];
+var unitMarkers = new Map();
+var groupSummaryMarkers = new Map();
+var currentIndicator;
+var CLUSTER_ZOOM_THRESHOLD = 3;
+
+// Navigation positions dictionary
+var navigationPoints = {
+    'Main Entrance': { latlng: [0,0], label: 'Re-center map' },
+    // Add more positions as needed
+};
+
+// Initialize the map first
+const map = L.map('map', {
+    crs: L.CRS.Simple,
+    minZoom: 0,
+    maxZoom: 6,
+    zoom: 2
 });
 
-function initializeSearch() {
-    // Get filter elements
-    const sectorFilter = document.getElementById('sectorFilter');
-    const groupFilter = document.getElementById('groupFilter');
-    const buildingFilter = document.getElementById('buildingFilter');
-    const clearFiltersBtn = document.getElementById('clearFilters');
-    const unitGrid = document.getElementById('unitGrid');
-    const noUnitsMessage = document.getElementById('noUnitsMessage');
+// Log that map object was created
+console.log("Map object created:", map);
+
+try {
+    // Define bounds and add image overlay
+    const bounds = [[0, 0], [500, 800]];
+    console.log("Adding image overlay with bounds:", bounds);
+    L.imageOverlay(mapImageUrl, bounds).addTo(map);
     
-    // Initialize: disable group and building filters until sector is selected
-    groupFilter.disabled = true;
-    buildingFilter.disabled = true;
+    // Fit map to bounds
+    console.log("Fitting map to bounds");
+    map.fitBounds(bounds);
+    console.log("Map initialization complete");
+} catch (error) {
+    console.error("Error during map initialization:", error);
+}
+
+// Function to load all data from API
+function loadAllData() {
+    showLoadingSpinner();
     
-    // Populate sector filter
-    function populateSectorFilter() {
-        sectorFilter.innerHTML = '<option value="">All Sectors</option>';
-        
-        // Get unique sectors from the sectors array
-        sectors.forEach(sector => {
-            const option = document.createElement('option');
-            option.value = sector.name;
-            option.textContent = sector.name;
-            sectorFilter.appendChild(option);
-        });
-    }
-    
-    // Populate group filter based on selected sector
-    function populateGroupFilter(selectedSector) {
-        groupFilter.innerHTML = '<option value="">All Groups</option>';
-        
-        if (!selectedSector) {
-            // If no sector selected, disable groups filter
-            groupFilter.disabled = true;
-            return;
-        }
-        
-            // Filter groups by selected sector
-            const filteredGroups = groups.filter(group => group.sectorName === selectedSector);
-        
-        if (filteredGroups.length === 0) {
-            groupFilter.disabled = true;
-            return;
-        }
-            
-            filteredGroups.forEach(group => {
-                const option = document.createElement('option');
-                option.value = group.name;
-                option.textContent = group.name.replace(`${group.sectorName} - `, ''); // Remove sector prefix for display
-                option.setAttribute('data-full-name', group.name);
-                groupFilter.appendChild(option);
+    // Load sectors
+    api.sectors.getAll()
+        .then(data => {
+            sectors = data;
+            return api.groups.getAll();
+        })
+        .then(data => {
+            groups = data;
+            return api.buildings.getAll();
+        })
+        .then(data => {
+            buildings = data;
+            return api.units.getAll();
+        })
+        .then(data => {
+            units = data;
+            return api.navigation.getAll();
+        })
+        .then(data => {
+            // Process navigation points
+            navigationPoints = {'Main Entrance': { latlng: [0,0], label: 'Re-center map' }};
+            data.forEach(navPoint => {
+                navigationPoints[navPoint.name] = {
+                    latlng: navPoint.position.latlng,
+                    label: navPoint.label,
+                    isSector: navPoint.isSector
+                };
             });
-        
-        // Enable group filter if options are available
-        groupFilter.disabled = false;
-    }
-    
-    // Populate building filter based on selected group
-    function populateBuildingFilter(selectedGroup) {
-        buildingFilter.innerHTML = '<option value="">All Buildings</option>';
-        
-        if (!selectedGroup) {
-            // If no group selected, disable buildings filter
-            buildingFilter.disabled = true;
-            return;
-        }
-        
-            // Filter buildings by selected group
-            const filteredBuildings = buildings.filter(building => building.groupName === selectedGroup);
-        
-        if (filteredBuildings.length === 0) {
-            buildingFilter.disabled = true;
-            return;
-        }
             
-            filteredBuildings.forEach(building => {
-                const option = document.createElement('option');
-                option.value = building.name;
-                option.textContent = building.name.replace(`${building.groupName} - `, ''); // Remove group prefix for display
-                option.setAttribute('data-full-name', building.name);
-                buildingFilter.appendChild(option);
-            });
-        
-        // Enable building filter if options are available
-        buildingFilter.disabled = false;
-    }
-    
-    // Render unit cards based on filters
-    function renderUnitCards() {
-        const selectedSector = sectorFilter.value;
-        const selectedGroup = groupFilter.value;
-        const selectedBuilding = buildingFilter.value;
-        const minPrice = Number(document.getElementById('minPrice').value) || 0;
-        const maxPrice = Number(document.getElementById('maxPrice').value) || Infinity;
-        const minArea = Number(document.getElementById('minArea').value) || 0;
-        const maxArea = Number(document.getElementById('maxArea').value) || Infinity;
-        
-        // Filter units based on selections
-        let filteredUnits = [...units]; // Create a copy of units array
-        
-        // Apply hierarchy filters
-        if (selectedBuilding) {
-            filteredUnits = filteredUnits.filter(unit => unit.buildingName === selectedBuilding);
-        } else if (selectedGroup) {
-            filteredUnits = filteredUnits.filter(unit => {
-                const building = buildings.find(b => b.name === unit.buildingName);
-                return building && building.groupName === selectedGroup;
-            });
-        } else if (selectedSector) {
-            filteredUnits = filteredUnits.filter(unit => {
-                const building = buildings.find(b => b.name === unit.buildingName);
-                if (!building) return false;
-                
-                const group = groups.find(g => g.name === building.groupName);
-                return group && group.sectorName === selectedSector;
-            });
-        }
-        
-        // Apply range filters
-        filteredUnits = filteredUnits.filter(unit => {
-            const price = parseFloat(unit.price);
-            const area = parseFloat(unit.area);
-            
-            const priceInRange = (!minPrice || price >= minPrice) && 
-                                (!maxPrice || price <= maxPrice);
-            const areaInRange = (!minArea || area >= minArea) && 
-                               (!maxArea || area <= maxArea);
-            
-            return priceInRange && areaInRange;
-        });
-        
-        // Clear unit grid
-        unitGrid.innerHTML = '';
-        
-        // Show message if no units found
-        if (filteredUnits.length === 0) {
-            noUnitsMessage.style.display = 'flex';
-        } else {
-            noUnitsMessage.style.display = 'none';
-            
-            // Render unit cards
-            filteredUnits.forEach(unit => {
-                const card = document.createElement('div');
-                card.className = `unit-card ${unit.availability}`;
-                
-                const statusLabel = unit.availability === 'available' ? 'Available' : 'Not Available';
-                
-                card.innerHTML = `
-                    <div class="unit-card-header">
-                        <h3>${unit.name}</h3>
-                        <span class="unit-type">${unit.type}</span>
-                    </div>
-                    <div class="unit-card-body">
-                        <p><i class="fas fa-ruler-combined"></i> ${unit.area} m²</p>
-                        <p><i class="fas fa-tag"></i> $${Number(unit.price).toLocaleString()}</p>
-                        <p><i class="fas fa-building"></i> ${unit.buildingName.split(' - ').pop()}</p>
-                        <p><i class="fas fa-check-circle"></i> <span class="status-${unit.availability}">${statusLabel}</span></p>
-                    </div>
-                    <div class="unit-card-footer">
-                        <button onclick="showUnitDetails('${unit.name}', ${unit.position.lat}, ${unit.position.lng})" class="view-details-btn">
-                            <i class="fas fa-info-circle"></i> Details
-                        </button>
-                        <button onclick="navigateToUnit('${unit.name}')" class="navigate-btn">
-                            <i class="fas fa-map-marker-alt"></i> Locate
-                        </button>
-                    </div>
-                `;
-                
-                unitGrid.appendChild(card);
-            });
-        }
-        
-        // After rendering cards, add comparison buttons
-        updateCompareButtons();
-    }
-    
-    // Navigate to unit on map
-    window.navigateToUnit = function(unitName) {
-        const unit = units.find(u => u.name === unitName);
-        if (unit) {
-            // Remove previous indicator if exists
-            if (currentIndicator) {
-                map.removeLayer(currentIndicator);
+            // Initialize UI
+            initializeMarkersFromData();
+            renderNavigationMenu();
+            if (window.updateSearchFilters) {
+                window.updateSearchFilters();
             }
-            
-            // Create indicator circle
-            currentIndicator = L.circle([unit.position.lat, unit.position.lng], {
-                color: '#e74c3c',
-                fillColor: '#e74c3c',
-                fillOpacity: 0.2,
-                radius: 20
-            }).addTo(map);
-            
-            // Center the map with animation
-            map.flyTo([unit.position.lat, unit.position.lng], 5, {
-                animate: true,
-                duration: 1
-            });
-            
-            // Add pulsing effect
-            setTimeout(() => {
-                currentIndicator.setStyle({
-                    fillOpacity: 0.1,
-                    radius: 30
-                });
-            }, 500);
-            
-            showNotification(`Navigating to Unit: ${unit.name}`, 'success');
-        }
-    };
-    
-    // Clear all filters
-    function clearFilters() {
-        sectorFilter.value = '';
-        groupFilter.innerHTML = '<option value="">All Groups</option>';
-        buildingFilter.innerHTML = '<option value="">All Buildings</option>';
-        document.getElementById('minPrice').value = '';
-        document.getElementById('maxPrice').value = '';
-        document.getElementById('minArea').value = '';
-        document.getElementById('maxArea').value = '';
-        
-        // Disable dependent filters
-        groupFilter.disabled = true;
-        buildingFilter.disabled = true;
-        
-        renderUnitCards();
-    }
-    
-    // Event listeners
-    sectorFilter.addEventListener('change', function() {
-        // Reset group and building filters when sector changes
-        populateGroupFilter(this.value);
-        buildingFilter.innerHTML = '<option value="">All Buildings</option>';
-        buildingFilter.disabled = true;
-        renderUnitCards();
-    });
-    
-    groupFilter.addEventListener('change', function() {
-        populateBuildingFilter(this.value);
-        renderUnitCards();
-    });
-    
-    buildingFilter.addEventListener('change', function() {
-        renderUnitCards();
-    });
-    
-    clearFiltersBtn.addEventListener('click', clearFilters);
-    
-    // Add these event listeners in the initializeSearch function
-    document.getElementById('minPrice').addEventListener('input', renderUnitCards);
-    document.getElementById('maxPrice').addEventListener('input', renderUnitCards);
-    document.getElementById('minArea').addEventListener('input', renderUnitCards);
-    document.getElementById('maxArea').addEventListener('input', renderUnitCards);
-    
-    // Initialize filters and render units
-    populateSectorFilter();
-    renderUnitCards();
-    
-    // Update filters when data changes
-    window.updateSearchFilters = function() {
-        populateSectorFilter();
-        populateGroupFilter(sectorFilter.value);
-        populateBuildingFilter(groupFilter.value);
-        renderUnitCards();
-    };
-    
-    // Add this function call to createSector, createGroup, createBuilding, and createUnit functions
-    const originalCreateSector = window.createSector;
-    window.createSector = function(lat, lng) {
-        originalCreateSector(lat, lng);
-        updateSearchFilters();
-    };
-    
-    const originalCreateGroup = window.createGroup;
-    window.createGroup = function(lat, lng) {
-        originalCreateGroup(lat, lng);
-        updateSearchFilters();
-    };
-    
-    const originalCreateBuilding = window.createBuilding;
-    window.createBuilding = function(lat, lng) {
-        originalCreateBuilding(lat, lng);
-        updateSearchFilters();
-    };
-    
-    const originalCreateUnit = window.createUnit;
-    window.createUnit = function(lat, lng) {
-        originalCreateUnit(lat, lng);
-        updateSearchFilters();
-    };
-    
-    const originalSaveUnitEdit = window.saveUnitEdit;
-    window.saveUnitEdit = function(unitName, lat, lng) {
-        const unit = units.find(u => u.name === unitName && 
-                                   u.position.lat === lat && 
-                                   u.position.lng === lng);
-        if (!unit) return;
-
-        const newData = {
-            name: document.getElementById('editUnitName').value,
-            buildingName: document.getElementById('editUnitBuilding').value,
-            price: document.getElementById('editUnitPrice').value,
-            area: document.getElementById('editUnitArea').value,
-            type: document.getElementById('editUnitType').value,
-            availability: document.getElementById('editUnitAvailability').value,
-            position: unit.position
-        };
-
-        if (!newData.name || !newData.buildingName || !newData.price || !newData.area || !newData.type) {
-            showNotification('Please fill all fields', 'error');
-            return;
-        }
-
-        // Update unit data
-        const oldAvailability = unit.availability;
-        Object.assign(unit, newData);
-
-        // Find and update the marker
-        for (let id in map._layers) {
-            const layer = map._layers[id];
-            if (layer._latlng && 
-                layer._latlng.lat === unit.position.lat && 
-                layer._latlng.lng === unit.position.lng) {
-                
-                // Update marker icon
-                layer.setIcon(L.divIcon({
-                    html: `
-                        <div class="unit-marker ${unit.availability}">
-                            <span class="unit-label">${unit.name}</span>
-                        </div>`,
-                    className: 'custom-marker',
-                    iconSize: [30, 30],
-                    iconAnchor: [15, 15],
-                    popupAnchor: [0, -15]
-                }));
-                
-                // Update popup content
-                layer.setPopupContent(`
-                    <div class="unit-popup">
-                        <h3>${unit.name}</h3>
-                        <div class="popup-details">
-                            <p><i class="fas fa-building"></i> ${unit.buildingName}</p>
-                            <p><i class="fas fa-home"></i> ${unit.type}</p>
-                            <p><i class="fas fa-ruler-combined"></i> ${unit.area} m²</p>
-                            <p><i class="fas fa-tag"></i> $${Number(unit.price).toLocaleString()}</p>
-                            <p><i class="fas fa-check-circle"></i> Status: <span class="status-${unit.availability}">${unit.availability.charAt(0).toUpperCase() + unit.availability.slice(1)}</span></p>
-                        </div>
-                        <button onclick="showUnitDetails('${unit.name}', ${unit.position.lat}, ${unit.position.lng})" class="details-btn">
-                            View Details
-                        </button>
-                    </div>
-                `);
-                
-                // Handle visibility based on zoom level and availability change
-                if (map.getZoom() <= CLUSTER_ZOOM_THRESHOLD) {
-                    if (unit.availability === 'available') {
-                        layer.setOpacity(0);
-                    } else {
-                        layer.setOpacity(0.5);
-                    }
-                }
-                
-                break;
-            }
-        }
-
-        // Update the search results if availability changed
-        if (oldAvailability !== unit.availability) {
             if (window.renderUnitCards) {
                 window.renderUnitCards();
             }
-        }
+            
+            hideLoadingSpinner();
+        })
+        .catch(error => {
+            console.error("Error loading data:", error);
+            showNotification('Error loading data from server', 'error');
+            hideLoadingSpinner();
+        });
+}
 
-        // Update group summaries if needed
-        updateMarkerVisibility();
-
-        map.closePopup();
-        showNotification('Unit updated successfully', 'success');
-    };
+// Initialize markers from loaded data
+function initializeMarkersFromData() {
+    // Clear existing markers
+    unitMarkers.forEach(marker => map.removeLayer(marker));
+    unitMarkers.clear();
     
-    const originalDeleteUnit = window.deleteUnit;
-    window.deleteUnit = function(unitName) {
-        originalDeleteUnit(unitName);
-        updateSearchFilters();
+    // Create unit markers
+    units.forEach(unit => {
+        const lat = unit.position.lat;
+        const lng = unit.position.lng;
+        
+        const marker = L.marker([lat, lng], {
+            icon: L.divIcon({
+                html: `
+                    <div class="unit-marker ${unit.availability}">
+                        <span class="unit-label">${unit.name}</span>
+                    </div>`,
+                className: 'custom-marker',
+                iconSize: [30, 30],
+                iconAnchor: [15, 15],
+                popupAnchor: [0, -15]
+            }),
+        }).addTo(map);
+        
+        // Store marker reference
+        unitMarkers.set(unit.name, marker);
+        
+        // Set initial visibility based on current zoom
+        if (map.getZoom() <= CLUSTER_ZOOM_THRESHOLD) {
+            marker.setOpacity(0);
+        }
+        
+        // Update popup content
+        marker.bindPopup(`
+            <div class="unit-popup">
+                <h3>${unit.name}</h3>
+                <div class="popup-details">
+                    <p><i class="fas fa-building"></i> ${unit.buildingName}</p>
+                    <p><i class="fas fa-home"></i> ${unit.type}</p>
+                    <p><i class="fas fa-ruler-combined"></i> ${unit.area} m²</p>
+                    <p><i class="fas fa-tag"></i> $${Number(unit.price).toLocaleString()}</p>
+                    <p><i class="fas fa-check-circle"></i> Status: <span class="status-${unit.availability}">${unit.availability.charAt(0).toUpperCase() + unit.availability.slice(1)}</span></p>
+                </div>
+                <button onclick="showUnitDetails('${unit.name}', ${lat}, ${lng})" class="details-btn">
+                    View Details
+                </button>
+            </div>
+        `);
+    });
+    
+    // Update visibility
+    updateMarkerVisibility();
+}
+
+// Show loading spinner
+function showLoadingSpinner() {
+    // Create loading overlay if it doesn't exist
+    if (!document.getElementById('loadingOverlay')) {
+        const overlay = document.createElement('div');
+        overlay.id = 'loadingOverlay';
+        overlay.className = 'loading-overlay';
+        overlay.innerHTML = `
+            <div class="loading-spinner"></div>
+            <p>Loading data...</p>
+        `;
+        document.body.appendChild(overlay);
+    } else {
+        document.getElementById('loadingOverlay').style.display = 'flex';
+    }
+}
+
+// Hide loading spinner
+function hideLoadingSpinner() {
+    const overlay = document.getElementById('loadingOverlay');
+    if (overlay) {
+        overlay.style.display = 'none';
+    }
+}
+
+// Search Frame Component
+document.addEventListener('DOMContentLoaded', function() {
+    console.log("DOM fully loaded, initializing app");
+    
+    // Set up navigation toggle
+    setupNavigationToggle();
+    
+    // Initialize navigation menu in collapsed state
+    const navMenu = document.getElementById('navigationMenu');
+    if (navMenu) {
+        navMenu.classList.add('collapsed'); // Start collapsed
+        console.log("Navigation menu initialized in collapsed state");
+    }
+    
+    // Load data from API
+    loadAllData();
+    
+    // Setup export/import functionality
+    setupDataManagement();
+    
+    // Ensure map is properly initialized
+    try {
+        // Verify we have access to Leaflet
+        if (!window.L) {
+            console.error("Leaflet library not loaded!");
+            return;
+        }
+        
+        console.log("Map should be available now");
+        
+        // Test if map.jpg can be loaded
+        const img = new Image();
+        img.onload = function() {
+            console.log("Map image loaded successfully");
+        };
+        img.onerror = function() {
+            console.error("Failed to load map image");
+            showNotification("Failed to load map image", "error");
+        };
+        img.src = mapImageUrl;
+        
+        // Initialize search if it exists
+        if (typeof initializeSearch === 'function') {
+            initializeSearch();
+        }
+        
+        // Setup marker visibility
+        setTimeout(() => {
+            updateMarkerVisibility();
+        }, 1000);
+    } catch (error) {
+        console.error("Error during initialization:", error);
+    }
+});
+
+// Utility functions
+function debounce(func, wait) {
+    let timeout;
+    return function(...args) {
+        const context = this;
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(context, args), wait);
     };
 }
 
@@ -460,51 +250,61 @@ document.addEventListener('DOMContentLoaded', function() {
     const splashScreen = document.getElementById('splashScreen');
     
     // Hide splash screen after 4 seconds
+    if (splashScreen) {
     setTimeout(() => {
         splashScreen.style.display = 'none';
     }, 4000);
+    }
 });
-
-const map = L.map('map', {
-    crs: L.CRS.Simple,
-    minZoom: 0,
-    maxZoom: 6,
-    zoom: -1
-});
-
-const bounds = [[0, 0], [500, 800]]; // Adjust to the image dimensions
-L.imageOverlay('map.jpg', bounds).addTo(map);
-map.fitBounds(bounds);
-
-const unitForm = document.getElementById('unitForm');
-const unitList = document.getElementById('unitList');
-
-let units = [];
-let markers = [];
-let currentIndicator;
 
 // Add navigation positions dictionary
-const navigationPoints = {
-    'Main Entrance': { latlng: [0,0], label: 'Re-center map' },
-    // Add more positions as needed
-};
+// This is a duplicate and should be deleted
+// const navigationPoints = {
+//     'Main Entrance': { latlng: [0,0], label: 'Re-center map' },
+//     // Add more positions as needed
+// };
 
 // Add to Navigation function
 window.addToNavigation = function(name, lat, lng, isSector = false) {
-    navigationPoints[name] = {
-        latlng: [lat, lng],
+    // Create navigation data
+    const navData = {
+        name: name,
+        position: {
+            latlng: [lat, lng]
+        },
         label: name,
         isSector: isSector
     };
     
-    renderNavigationMenu();
-    map.closePopup();
-    showNotification('Added to quick navigation', 'success');
+    // Show loading notification
+    showNotification('Adding to navigation...', 'success');
+    
+    // Send to API
+    api.navigation.create(navData)
+        .then(createdNav => {
+            // Add the point to navigation points locally
+            navigationPoints[name] = {
+                latlng: [lat, lng],
+                label: name,
+                isSector: isSector
+            };
+            
+            // Update the navigation menu
+            renderNavigationMenu();
+            map.closePopup();
+            showNotification('Added to quick navigation', 'success');
+        })
+        .catch(error => {
+            console.error("Error adding to navigation:", error);
+            showNotification('Error adding to navigation', 'error');
+        });
 };
 
 // Update the navigation points rendering function
 function renderNavigationMenu() {
     const navigationMenu = document.getElementById('navigationMenu');
+    if (!navigationMenu) return;
+
     navigationMenu.innerHTML = `
         <div class="search-container">
             <input 
@@ -516,9 +316,10 @@ function renderNavigationMenu() {
             <i class="fas fa-search search-icon"></i>
         </div>
         <div class="nav-buttons">
-            ${Object.keys(navigationPoints).map(point => `
-                <button onclick="navigateTo('${point}')" class="nav-button">
-                    <i class="fas fa-map-marker-alt"></i> ${point}
+            ${Object.entries(navigationPoints).map(([name, point]) => `
+                <button onclick="navigateTo('${name}')" class="nav-button ${point.isSector ? 'sector' : ''}">
+                    <i class="fas fa-${point.isSector ? 'draw-polygon' : 'map-marker-alt'}"></i> 
+                    ${name}
                 </button>
             `).join('')}
         </div>
@@ -526,19 +327,17 @@ function renderNavigationMenu() {
 
     // Add search functionality
     const searchInput = document.getElementById('navSearch');
+    if (searchInput) {
     searchInput.addEventListener('input', function(e) {
         const searchTerm = e.target.value.toLowerCase();
         const buttons = document.querySelectorAll('.nav-button');
         
         buttons.forEach(button => {
             const text = button.textContent.toLowerCase();
-            if (text.includes(searchTerm)) {
-                button.style.display = 'flex';
-            } else {
-                button.style.display = 'none';
-            }
+                button.style.display = text.includes(searchTerm) ? 'flex' : 'none';
         });
     });
+    }
 }
 
 // Function to show the add navigation form
@@ -590,13 +389,6 @@ window.cancelNavigation = function() {
 
 // Initialize the navigation menu
 renderNavigationMenu();
-
-// Add groups and buildings storage
-let groups = [];
-let buildings = [];
-
-// Add sectors storage
-let sectors = [];
 
 // Modify double-click handler to include sectors
 map.on('dblclick', function(e) {
@@ -664,20 +456,7 @@ window.showGroupForm = function(lat, lng) {
         return;
     }
 
-    // Get all sectors that contain this point
-    const availableSectors = sectors.filter(sector => {
-        const distance = map.distance(
-            [lat, lng],
-            [sector.position.lat, sector.position.lng]
-        );
-        return true; // Since we removed radius check, all sectors are valid
-    });
-
-    if (availableSectors.length === 0) {
-        showNotification('This location is not within any sector', 'error');
-        return;
-    }
-
+    // Create the popup for group creation
     const popup = L.popup({
         className: 'group-creation-popup'
     })
@@ -688,7 +467,7 @@ window.showGroupForm = function(lat, lng) {
             <div class="popup-form-group">
                 <select id="groupSector" required>
                     <option value="">Select Sector</option>
-                    ${availableSectors.map(sector => 
+                    ${sectors.map(sector => 
                         `<option value="${sector.name}">${sector.name}</option>`
                     ).join('')}
                 </select>
@@ -714,14 +493,14 @@ window.showBuildingForm = function(lat, lng) {
     map.closePopup();
     
     // Only show groups that exist
-    const groupOptions = groups.map(group => 
-        `<option value="${group.name}">${group.name}</option>`
-    ).join('');
-    
-    if (!groupOptions) {
+    if (groups.length === 0) {
         showNotification('Please create a group first', 'error');
         return;
     }
+    
+    const groupOptions = groups.map(group => 
+        `<option value="${group.name}">${group.name}</option>`
+    ).join('');
 
     const popup = L.popup({
         className: 'building-creation-popup'
@@ -739,12 +518,6 @@ window.showBuildingForm = function(lat, lng) {
             <div class="popup-form-group">
                 <input type="text" id="buildingName" placeholder="Building Name" required>
             </div>
-            <div class="popup-form-group">
-                <input type="number" id="buildingFloors" placeholder="Number of Floors" required>
-            </div>
-            <div class="popup-form-group">
-                <input type="number" id="buildingSections" placeholder="Number of Sections" required>
-            </div>
             <div class="popup-form-buttons">
                 <button onclick="createBuilding(${lat}, ${lng})" class="create-btn">
                     <i class="fas fa-plus"></i> Create
@@ -758,19 +531,19 @@ window.showBuildingForm = function(lat, lng) {
     .openOn(map);
 };
 
-// Unit Form (Modified)
+// Unit Form
 window.showUnitForm = function(lat, lng) {
     map.closePopup();
     
     // Get all buildings
-    const buildingOptions = buildings.map(building => 
-        `<option value="${building.name}">${building.name}</option>`
-    ).join('');
-    
-    if (!buildingOptions) {
+    if (buildings.length === 0) {
         showNotification('Please create a building first', 'error');
         return;
     }
+    
+    const buildingOptions = buildings.map(building => 
+        `<option value="${building.name}">${building.name}</option>`
+    ).join('');
 
     const popup = L.popup({
         className: 'unit-creation-popup'
@@ -830,153 +603,101 @@ window.createGroup = function(lat, lng) {
     // Create full name with sector prefix
     const fullName = `${sectorName} - ${groupName}`;
 
-    // Add group with sector reference and full name
-    groups.push({
+    // Prepare data for API
+    const groupData = {
         name: fullName,
         sectorName,
         position: { lat, lng }
-    });
+    };
 
-    // Ask to add to navigation
-    const addToNavPopup = L.popup({
-        className: 'nav-question-popup'
-    })
-    .setLatLng([lat, lng])
-    .setContent(`
-        <div class="popup-form">
-            <h4>Add to Quick Navigation?</h4>
-            <div class="popup-form-buttons">
-                <button onclick="addToNavigation('${fullName}', ${lat}, ${lng}, false, '${sectorName}')" class="create-btn">
-                    <i class="fas fa-check"></i> Yes
-                </button>
-                <button onclick="closePopup()" class="cancel-btn">
-                    <i class="fas fa-times"></i> No
-                </button>
-            </div>
-        </div>
-    `)
-    .openOn(map);
+    // Show loading indication
+    showNotification('Creating group...', 'success');
+    
+    // Send to API
+    api.groups.create(groupData)
+        .then(createdGroup => {
+            // Add to local array
+            groups.push(createdGroup);
 
-    showNotification('Group created successfully', 'success');
+            // Close the creation popup
+            map.closePopup();
+
+            // Show navigation suggestion popup
+            const addToNavPopup = L.popup({
+                className: 'nav-question-popup'
+            })
+            .setLatLng([lat, lng])
+            .setContent(`
+                <div class="popup-form">
+                    <h4>Add to Quick Navigation?</h4>
+                    <div class="popup-form-buttons">
+                        <button onclick="addToNavigation('${fullName}', ${lat}, ${lng})" class="create-btn">
+                            <i class="fas fa-check"></i> Yes
+                        </button>
+                        <button onclick="closePopup()" class="cancel-btn">
+                            <i class="fas fa-times"></i> No
+                        </button>
+                    </div>
+                </div>
+            `)
+            .openOn(map);
+
+            showNotification('Group created successfully', 'success');
+            
+            // Update search filters if the function exists
+            if (window.updateSearchFilters) {
+                window.updateSearchFilters();
+            }
+        })
+        .catch(error => {
+            console.error("Error creating group:", error);
+            showNotification('Error creating group', 'error');
+        });
 };
 
 // Create Building
 window.createBuilding = function(lat, lng) {
     const groupName = document.getElementById('buildingGroup').value;
     const buildingName = document.getElementById('buildingName').value;
-    const numFloors = parseInt(document.getElementById('buildingFloors').value);
-    const numSections = parseInt(document.getElementById('buildingSections').value);
     
-    if (!groupName || !buildingName || !numFloors || !numSections) {
+    if (!groupName || !buildingName) {
         showNotification('Please fill all fields', 'error');
         return;
     }
 
     const fullName = `${groupName} - ${buildingName}`;
     
-    const building = {
+    // Prepare data for API
+    const buildingData = {
         name: fullName,
         groupName,
-        position: { lat, lng },
-        floors: numFloors,
-        sections: numSections,
-        units: []
+        position: { lat, lng }
     };
-    
-    buildings.push(building);
 
-    // Create a point object exactly at the clicked location
-    const point = map.latLngToLayerPoint([lat, lng]);
+    // Show loading indication
+    showNotification('Creating building...', 'success');
     
-    // Create a div element for the marker
-    const markerDiv = document.createElement('div');
-    markerDiv.className = 'building-marker-container';
-    markerDiv.innerHTML = `
-        <div class="building-marker">
-            <i class="fas fa-building"></i>
-        </div>
-        <div class="building-label">${buildingName}</div>
-    `;
-    
-    // Create custom popup div
-    const popupDiv = document.createElement('div');
-    popupDiv.className = 'custom-building-popup';
-    popupDiv.innerHTML = `
-        <div class="custom-popup-content">
-            <div class="popup-header">
-                <h3>${buildingName}</h3>
-                <button class="close-popup-btn"><i class="fas fa-times"></i></button>
-            </div>
-            <div class="popup-details">
-                <p><i class="fas fa-building"></i> Group: ${groupName}</p>
-                <p><i class="fas fa-layers"></i> Floors: ${numFloors}</p>
-                <p><i class="fas fa-th"></i> Sections per Floor: ${numSections}</p>
-            </div>
-        </div>
-    `;
-    popupDiv.style.display = 'none';
-    
-    // Position marker and popup
-    markerDiv.style.position = 'absolute';
-    markerDiv.style.left = point.x + 'px';
-    markerDiv.style.top = point.y + 'px';
-    markerDiv.style.zIndex = 1000;
-    markerDiv.style.pointerEvents = 'auto'; // Make sure it's clickable
-    markerDiv.style.cursor = 'pointer';
-    
-    // Add the marker to the map's pane
-    map.getPanes().markerPane.appendChild(markerDiv);
-    document.body.appendChild(popupDiv); // Add popup to body
-    
-    // Store references for later updates
-    building.markerElement = markerDiv;
-    building.popupElement = popupDiv;
-    building.point = point;
-    
-    // Add click handler to show/hide custom popup
-    markerDiv.addEventListener('click', function(e) {
-        e.stopPropagation(); // Prevent map click events
-        
-        // Position popup above marker
-        const markerRect = markerDiv.getBoundingClientRect();
-        popupDiv.style.position = 'absolute';
-        popupDiv.style.left = markerRect.left + 'px';
-        popupDiv.style.top = (markerRect.top - popupDiv.offsetHeight - 10) + 'px';
-        popupDiv.style.display = 'block';
-    });
-    
-    // Add close button functionality
-    popupDiv.querySelector('.close-popup-btn').addEventListener('click', function() {
-        popupDiv.style.display = 'none';
-    });
-    
-    // Close popup when clicking elsewhere
-    document.addEventListener('click', function(e) {
-        if (!popupDiv.contains(e.target) && !markerDiv.contains(e.target)) {
-            popupDiv.style.display = 'none';
-        }
-    });
+    // Send to API
+    api.buildings.create(buildingData)
+        .then(createdBuilding => {
+            // Add to local array
+            buildings.push(createdBuilding);
 
-    // Update marker position on map move/zoom
-    map.on('moveend', function() {
-        const newPoint = map.latLngToLayerPoint([lat, lng]);
-        markerDiv.style.left = newPoint.x + 'px';
-        markerDiv.style.top = newPoint.y + 'px';
-        
-        // Hide popup when map moves
-        popupDiv.style.display = 'none';
-    });
-
-    showNotification('Building created successfully', 'success');
-    map.closePopup();
+            showNotification('Building created successfully', 'success');
+            map.closePopup();
+            
+            // Update search filters if the function exists
+            if (window.updateSearchFilters) {
+                window.updateSearchFilters();
+            }
+        })
+        .catch(error => {
+            console.error("Error creating building:", error);
+            showNotification('Error creating building', 'error');
+        });
 };
 
-// Add these variables at the top level with other declarations
-let unitMarkers = {};
-let groupSummaryMarkers = {};
-const CLUSTER_ZOOM_THRESHOLD = 3;
-
-// Main visibility control function
+// Improved marker visibility management system
 function updateMarkerVisibility() {
     const currentZoom = map.getZoom();
     
@@ -986,64 +707,53 @@ function updateMarkerVisibility() {
     }
     
     if (currentZoom <= CLUSTER_ZOOM_THRESHOLD) {
-        // At low zoom, hide all markers and show summaries
-        hideAllUnitMarkers();
-        window._visibilityTimeout = setTimeout(showGroupSummaries, 100);
+        removeGroupSummaries(); // Remove any existing summaries first
+        processLowZoom();
     } else {
-        // At high zoom, hide summaries and show all markers
-        hideGroupSummaries();
-        window._visibilityTimeout = setTimeout(showAllUnitMarkers, 100);
+        removeGroupSummaries();
+        processHighZoom();
     }
 }
 
-// Hide all unit markers regardless of type
-function hideAllUnitMarkers() {
-    for (let id in map._layers) {
-        const layer = map._layers[id];
-        if (layer._icon) {
-            const unitMarkerEl = layer._icon.querySelector('.unit-marker');
-            if (unitMarkerEl) {
-                layer.setOpacity(0);
-            }
-        }
+function processLowZoom() {
+    // Step 1: Hide all unit markers by iterating over our unitMarkers Map
+    for (const [name, marker] of unitMarkers.entries()) {
+        marker.setOpacity(0);
     }
-}
-
-// Show all unit markers with appropriate opacity based on availability
-function showAllUnitMarkers() {
-    for (let id in map._layers) {
-        const layer = map._layers[id];
-        if (layer._icon) {
-            const unitMarkerEl = layer._icon.querySelector('.unit-marker');
-            if (unitMarkerEl) {
-                if (unitMarkerEl.classList.contains('available')) {
-                    layer.setOpacity(1); // Full opacity for available
-                } else if (unitMarkerEl.classList.contains('not-available')) {
-                    layer.setOpacity(0.5); // Semi-transparent for unavailable
-                } else {
-                    layer.setOpacity(1); // Default fallback
-                }
-            }
-        }
-    }
-}
-
-// Remove all group summary markers
-function hideGroupSummaries() {
-    for (let id in map._layers) {
-        const layer = map._layers[id];
-        if (layer._icon && layer._icon.classList.contains('group-summary-icon')) {
-            map.removeLayer(layer);
-        }
-    }
-}
-
-// Create and display summary markers for each group
-function showGroupSummaries() {
-    // Remove any existing summary markers first
-    hideGroupSummaries();
     
-    // Create stats object to track counts by group
+    // Step 2: Create group summary markers
+    setTimeout(() => {
+        createGroupSummaries();
+    }, 50);
+}
+
+function processHighZoom() {
+    // Step 1: Remove all group summary markers
+    removeGroupSummaries();
+    
+    // Step 2: Show individual unit markers
+    window._visibilityTimeout = setTimeout(() => {
+        for (const [name, marker] of unitMarkers.entries()) {
+            const unit = units.find(u => u.name === name);
+            if (unit && unit.availability === 'available') {
+                marker.setOpacity(1);
+            } else if (unit) {
+                marker.setOpacity(0.7); // Semi-transparent for non-available units
+            }
+        }
+    }, 50);
+}
+
+function removeGroupSummaries() {
+    // Remove all group summary markers
+    for (const [groupName, marker] of groupSummaryMarkers.entries()) {
+        map.removeLayer(marker);
+    }
+    groupSummaryMarkers.clear();
+}
+
+function createGroupSummaries() {
+    // Create stats object to track counts
     const groupStats = {};
     
     // Initialize counts for all groups
@@ -1055,12 +765,16 @@ function showGroupSummaries() {
         };
     });
     
-    // Count units by group and availability
+    // Count units by availability for each group
     units.forEach(unit => {
+        // Find which group this unit belongs to
         const building = buildings.find(b => b.name === unit.buildingName);
         if (building && building.groupName) {
             const groupName = building.groupName;
+            
+            // Make sure the group exists in our stats
             if (groupStats[groupName]) {
+                // Increment the appropriate counter
                 if (unit.availability === 'available') {
                     groupStats[groupName].available++;
                 } else if (unit.availability === 'not-available') {
@@ -1070,16 +784,17 @@ function showGroupSummaries() {
         }
     });
     
-    // Create marker for each group that has units
+    // Create a marker for each group that has units
     Object.entries(groupStats).forEach(([groupName, stats]) => {
+        // Only create a marker if the group has any units and a valid position
         const totalUnits = stats.available + stats.notAvailable;
         if (totalUnits > 0 && stats.position) {
-            // Create the summary marker
+            // Create the marker
             const marker = L.marker([stats.position.lat, stats.position.lng], {
                 icon: L.divIcon({
                     html: `
                         <div class="group-summary-marker">
-                            <div class="group-summary-header">${groupName.split(' - ')[1]}</div>
+                            <div class="group-summary-header">${groupName.split(' - ')[1] || groupName}</div>
                             <div class="group-summary-counts">
                                 <span class="available-count">${stats.available} ✓</span>
                                 <span class="not-available-count">${stats.notAvailable} ✗</span>
@@ -1092,7 +807,10 @@ function showGroupSummaries() {
                 })
             }).addTo(map);
             
-            // Add click handler to zoom in to this group
+            // Store the marker in our Map
+            groupSummaryMarkers.set(groupName, marker);
+            
+            // Add click handler to zoom in
             marker.on('click', () => {
                 map.flyTo([stats.position.lat, stats.position.lng], CLUSTER_ZOOM_THRESHOLD + 1, {
                     animate: true,
@@ -1103,7 +821,7 @@ function showGroupSummaries() {
     });
 }
 
-// Modified createUnit function to handle marker visibility
+// Create Unit
 window.createUnit = function(lat, lng) {
     const buildingName = document.getElementById('unitBuilding').value;
     const name = document.getElementById('popupUnitName').value;
@@ -1117,47 +835,8 @@ window.createUnit = function(lat, lng) {
         return;
     }
 
-    // Create marker with appropriate icon
-    const marker = L.marker([lat, lng], {
-        icon: L.divIcon({
-            html: `
-                <div class="unit-marker ${availability}">
-                    <span class="unit-label">${name}</span>
-                </div>`,
-            className: 'custom-marker',
-            iconSize: [30, 30],
-            iconAnchor: [15, 15],
-            popupAnchor: [0, -15]
-        }),
-    }).addTo(map);
-
-    // Set initial visibility based on current zoom
-    if (map.getZoom() <= CLUSTER_ZOOM_THRESHOLD) {
-        marker.setOpacity(0); // Hide if we're at low zoom
-    } else {
-        // Set opacity based on availability
-        marker.setOpacity(availability === 'available' ? 1 : 0.5);
-    }
-
-    // Update popup content
-    marker.bindPopup(`
-        <div class="unit-popup">
-            <h3>${name}</h3>
-            <div class="popup-details">
-                <p><i class="fas fa-building"></i> ${buildingName}</p>
-                <p><i class="fas fa-home"></i> ${type}</p>
-                <p><i class="fas fa-ruler-combined"></i> ${area} m²</p>
-                <p><i class="fas fa-tag"></i> $${Number(price).toLocaleString()}</p>
-                <p><i class="fas fa-check-circle"></i> Status: <span class="status-${availability}">${availability.charAt(0).toUpperCase() + availability.slice(1)}</span></p>
-            </div>
-            <button onclick="showUnitDetails('${name}', ${lat}, ${lng})" class="details-btn">
-                View Details
-            </button>
-        </div>
-    `);
-
-    // Store unit data
-    units.push({
+    // Prepare unit data for API
+    const unitData = {
         name,
         buildingName,
         type,
@@ -1165,188 +844,89 @@ window.createUnit = function(lat, lng) {
         price,
         availability,
         position: { lat, lng }
-    });
-
-    showNotification('Unit created successfully', 'success');
-    map.closePopup();
-    
-    // Update visibility to ensure consistent state
-    updateMarkerVisibility();
-    if (window.updateSearchFilters) {
-        window.updateSearchFilters();
-    }
-};
-
-// Updated saveUnitEdit to properly handle visibility changes
-window.saveUnitEdit = function(unitName, lat, lng) {
-    const unit = units.find(u => u.name === unitName && 
-                            u.position.lat === lat && 
-                            u.position.lng === lng);
-    if (!unit) return;
-
-    // Get new values from form
-    const newData = {
-        name: document.getElementById('editUnitName').value,
-        buildingName: document.getElementById('editUnitBuilding').value,
-        price: document.getElementById('editUnitPrice').value,
-        area: document.getElementById('editUnitArea').value,
-        type: document.getElementById('editUnitType').value,
-        availability: document.getElementById('editUnitAvailability').value,
-        position: unit.position
     };
 
-    if (!newData.name || !newData.buildingName || !newData.price || !newData.area || !newData.type) {
-        showNotification('Please fill all fields', 'error');
-        return;
-    }
-
-    // Store old values for comparison
-    const oldAvailability = unit.availability;
+    // Show loading indication
+    showNotification('Creating unit...', 'success');
     
-    // Update unit data
-    Object.assign(unit, newData);
-
-    // Find and update the marker
-    for (let id in map._layers) {
-        const layer = map._layers[id];
-        if (layer._latlng && 
-            layer._latlng.lat === unit.position.lat && 
-            layer._latlng.lng === unit.position.lng) {
-                
-            // Update marker icon
-            layer.setIcon(L.divIcon({
-                html: `
-                    <div class="unit-marker ${unit.availability}">
-                        <span class="unit-label">${unit.name}</span>
-                    </div>`,
-                className: 'custom-marker',
-                iconSize: [30, 30],
-                iconAnchor: [15, 15],
-                popupAnchor: [0, -15]
-            }));
+    // Send to API
+    api.units.create(unitData)
+        .then(createdUnit => {
+            // Add to local array
+            units.push(createdUnit);
             
+            // Create marker
+            const marker = L.marker([lat, lng], {
+                icon: L.divIcon({
+                    html: `
+                        <div class="unit-marker ${availability}">
+                            <span class="unit-label">${name}</span>
+                        </div>`,
+                    className: 'custom-marker',
+                    iconSize: [30, 30],
+                    iconAnchor: [15, 15],
+                    popupAnchor: [0, -15]
+                }),
+            }).addTo(map);
+
+            // Store marker in our Map for easier management
+            unitMarkers.set(name, marker);
+
+            // Set initial visibility based on current zoom
+            if (map.getZoom() <= CLUSTER_ZOOM_THRESHOLD) {
+                marker.setOpacity(0); // Hide if we're at low zoom
+            }
+
             // Update popup content
-            layer.setPopupContent(`
+            marker.bindPopup(`
                 <div class="unit-popup">
-                    <h3>${unit.name}</h3>
+                    <h3>${name}</h3>
                     <div class="popup-details">
-                        <p><i class="fas fa-building"></i> ${unit.buildingName}</p>
-                        <p><i class="fas fa-home"></i> ${unit.type}</p>
-                        <p><i class="fas fa-ruler-combined"></i> ${unit.area} m²</p>
-                        <p><i class="fas fa-tag"></i> $${Number(unit.price).toLocaleString()}</p>
-                        <p><i class="fas fa-check-circle"></i> Status: <span class="status-${unit.availability}">${unit.availability.charAt(0).toUpperCase() + unit.availability.slice(1)}</span></p>
+                        <p><i class="fas fa-building"></i> ${buildingName}</p>
+                        <p><i class="fas fa-home"></i> ${type}</p>
+                        <p><i class="fas fa-ruler-combined"></i> ${area} m²</p>
+                        <p><i class="fas fa-tag"></i> $${Number(price).toLocaleString()}</p>
+                        <p><i class="fas fa-check-circle"></i> Status: <span class="status-${availability}">${availability.charAt(0).toUpperCase() + availability.slice(1)}</span></p>
                     </div>
-                    <button onclick="showUnitDetails('${unit.name}', ${unit.position.lat}, ${unit.position.lng})" class="details-btn">
+                    <button onclick="showUnitDetails('${name}', ${lat}, ${lng})" class="details-btn">
                         View Details
                     </button>
                 </div>
             `);
+
+            showNotification('Unit created successfully', 'success');
+            map.closePopup();
             
-            // Update visibility based on current zoom and availability
-            if (map.getZoom() <= CLUSTER_ZOOM_THRESHOLD) {
-                layer.setOpacity(0); // Hide at low zoom
-            } else {
-                // Show with appropriate opacity based on availability
-                layer.setOpacity(unit.availability === 'available' ? 1 : 0.5);
+            // Update visibility
+            updateMarkerVisibility();
+            if (window.updateSearchFilters) {
+                window.updateSearchFilters();
             }
             
-            break;
-        }
-    }
-
-    // Update the search results if needed
-    if (oldAvailability !== unit.availability) {
-        if (window.renderUnitCards) {
-            window.renderUnitCards();
-        }
-    }
-
-    // Update group summaries
-    updateMarkerVisibility();
-
-    map.closePopup();
-    showNotification('Unit updated successfully', 'success');
+            // Update UI
+            renderUnitList();
+            if (window.renderUnitCards) {
+                window.renderUnitCards();
+            }
+        })
+        .catch(error => {
+            console.error("Error creating unit:", error);
+            showNotification('Error creating unit', 'error');
+        });
 };
 
-// Add a debounce function for the zoom handler
-function debounce(func, wait) {
-    let timeout;
-    return function(...args) {
-        clearTimeout(timeout);
-        timeout = setTimeout(() => func.apply(this, args), wait);
-    };
-}
-
-// Set up the zoom handler with debouncing
-const debouncedUpdate = debounce(updateMarkerVisibility, 200);
-map.off('zoomend'); // Remove any existing handlers
-map.on('zoomend', debouncedUpdate);
-
-// CSS for the group summary markers
-const markerStyles = `
-.group-summary-marker {
-    background: white;
-    border-radius: 8px;
-    padding: 6px 10px;
-    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2);
-    border: 2px solid #3498db;
-    min-width: 90px;
-    text-align: center;
-    cursor: pointer;
-    transition: transform 0.2s ease;
-    pointer-events: auto;
-}
-
-.group-summary-marker:hover {
-    transform: scale(1.05);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-}
-
-.group-summary-header {
-    font-weight: bold;
-    color: #2c3e50;
-    margin-bottom: 5px;
-    font-size: 0.9rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.group-summary-counts {
-    display: flex;
-    justify-content: center;
-    gap: 12px;
-    font-size: 0.8rem;
-}
-
-.available-count {
-    color: #2ecc71;
-    font-weight: bold;
-}
-
-.not-available-count {
-    color: #e74c3c;
-    font-weight: bold;
-}
-
-.group-summary-icon {
-    pointer-events: auto !important;
-    opacity: 1 !important;
-}
-
-.custom-marker {
-    transition: opacity 0.3s ease !important;
-}
-`;
-
-// Add the styles to the document
-const styleElement = document.createElement('style');
-styleElement.textContent = markerStyles;
-document.head.appendChild(styleElement);
-
-// Initialize visibility on page load
+// We need to initialize this properly
 document.addEventListener('DOMContentLoaded', function() {
-    setTimeout(updateMarkerVisibility, 1500);
+    // Set a timer to ensure map is initialized
+    setTimeout(() => {
+        // Initialize marker visibility
+        updateMarkerVisibility();
+
+        // Set up proper zoom event handler with debounce
+        map.off('zoomend'); // Remove any existing handlers
+const debouncedUpdate = debounce(updateMarkerVisibility, 200);
+map.on('zoomend', debouncedUpdate);
+    }, 1000);
 });
 
 function renderUnitList() {
@@ -1359,44 +939,57 @@ function renderUnitList() {
     });
 }
 
-window.removeUnit = function (index) {
-    const { position } = units[index];
+window.removeUnit = function(index) {
+    const unit = units[index];
+    if (!unit) return;
+    
+    // Remove from units array
     units.splice(index, 1);
 
     // Find and remove the associated marker
-    const markerIndex = markers.findIndex(m => m.marker.getLatLng().equals(position));
-    if (markerIndex !== -1) {
-        map.removeLayer(markers[markerIndex].marker);
-        markers.splice(markerIndex, 1);
+    const marker = unitMarkers.get(unit.name);
+    if (marker) {
+        map.removeLayer(marker);
+        unitMarkers.delete(unit.name);
     }
 
+    // Update UI
     renderUnitList();
+    
+    // Update visibility and search results
+    updateMarkerVisibility();
+    if (window.renderUnitCards) {
+        window.renderUnitCards();
+    }
+    
+    showNotification('Unit removed successfully', 'success');
 };
 
 // Navigation function
 window.navigateTo = function(pointName) {
     const point = navigationPoints[pointName];
-    if (point) {
+    if (!point) return;
+
         // Remove previous indicator if exists
         if (currentIndicator) {
             map.removeLayer(currentIndicator);
         }
         
-        // Find if it's a group
+    // Find if it's a group
         const isGroup = groups.some(group => group.name === pointName);
         
-        // Set zoom level based on type
-        let zoomLevel = isGroup ? 6 : 3; // Default zoom or group zoom
+    // Set appropriate zoom level
+    const zoomLevel = isGroup ? 5 : 3;
         
         // Create indicator circle
         currentIndicator = L.circle(point.latlng, {
-            color: isGroup ? '#3498db' : '#e74c3c',
-            fillColor: isGroup ? '#3498db' : '#e74c3c',
+        color: isGroup ? '#3498db' : '#e74c3c',
+        fillColor: isGroup ? '#3498db' : '#e74c3c',
             fillOpacity: 0.2,
-            radius: isGroup ? 40 : 20
+        radius: isGroup ? 40 : 20
         }).addTo(map);
         
-        // Center the map with animation
+    // Center map with animation
         map.flyTo(point.latlng, zoomLevel, {
             animate: true,
             duration: 1
@@ -1406,14 +999,11 @@ window.navigateTo = function(pointName) {
         setTimeout(() => {
             currentIndicator.setStyle({
                 fillOpacity: 0.1,
-                radius: isGroup ? 60 : 30
+            radius: isGroup ? 60 : 30
             });
         }, 500);
 
-        // Show notification
-        const type = isGroup ? 'Group' : 'Location';
-        showNotification(`Navigating to ${type}: ${pointName}`, 'success');
-    }
+    showNotification(`Navigating to ${isGroup ? 'Group' : 'Location'}: ${pointName}`, 'success');
 };
 
 // إضافة نظام إشعارات
@@ -1531,85 +1121,9 @@ window.editUnit = function(unitName, lat, lng) {
     .openOn(map);
 };
 
-// Delete Unit Function
-window.deleteUnit = function(unitName, lat, lng) {
-    const unitIndex = units.findIndex(u => u.name === unitName && 
-                               u.position.lat === lat && 
-                               u.position.lng === lng);
-    if (unitIndex === -1) return;
-
-    const unit = units[unitIndex];
-    
-    // Remove unit from array
-    units.splice(unitIndex, 1);
-
-    // Remove marker from map
-    for (let id in map._layers) {
-        const layer = map._layers[id];
-        if (layer._latlng && 
-            layer._latlng.lat === unit.position.lat && 
-            layer._latlng.lng === unit.position.lng) {
-            map.removeLayer(layer);
-            break;
-        }
-    }
-
-    // Close modal
-    document.querySelector('.unit-modal')?.remove();
-    
-    // Update the unit grid
-    renderUnitCards();
-    
-    showNotification('Unit deleted successfully', 'success');
-
-    // Remove from unitMarkers
-    unitMarkers.delete(unitName);
-    
-    // Update group summaries
-    updateMarkerVisibility();
-};
-
-// Close popup helper
+// Utility function to close popups
 window.closePopup = function() {
     map.closePopup();
-};
-
-// Create Sector
-window.createSector = function(lat, lng) {
-    const name = document.getElementById('sectorName').value;
-    
-    if (!name) {
-        showNotification('Please enter sector name', 'error');
-        return;
-    }
-
-    // Add sector without marker
-    sectors.push({
-        name,
-        position: { lat, lng }
-    });
-
-    // Ask to add to navigation
-    const addToNavPopup = L.popup({
-        className: 'nav-question-popup'
-    })
-    .setLatLng([lat, lng])
-    .setContent(`
-        <div class="popup-form">
-            <h4>Add to Quick Navigation?</h4>
-            <div class="popup-form-buttons">
-                <button onclick="addToNavigation('${name}', ${lat}, ${lng}, true)" class="create-btn">
-                    <i class="fas fa-check"></i> Yes
-                </button>
-                <button onclick="closePopup()" class="cancel-btn">
-                    <i class="fas fa-times"></i> No
-                </button>
-            </div>
-        </div>
-    `)
-    .openOn(map);
-
-    showNotification('Sector created successfully', 'success');
 };
 
 // Remove the sector marker styles
@@ -1623,622 +1137,643 @@ if (existingHighlightStyle) {
     existingHighlightStyle.remove();
 }
 
-// Property Comparison System - Core Module
-const comparisonSystem = {
-    selectedUnits: [],
-    maxUnits: 4, // Maximum units to compare simultaneously
+// Sector creation function
+window.createSector = function(lat, lng) {
+    const name = document.getElementById('sectorName').value;
     
-    // Add a unit to comparison
-    addUnit: function(unitId) {
-        const unit = units.find(u => u.name === unitId);
-        if (!unit) return false;
-        
-        // Check if already in comparison
-        if (this.selectedUnits.some(u => u.name === unitId)) {
-            showNotification('This unit is already in your comparison', 'info');
-            return false;
-        }
-        
-        // Check max limit
-        if (this.selectedUnits.length >= this.maxUnits) {
-            showNotification(`You can compare up to ${this.maxUnits} units at once`, 'error');
-            return false;
-        }
-        
-        this.selectedUnits.push(unit);
-        this.updateComparisonUI();
-        
-        showNotification(`Added ${unit.name} to comparison`, 'success');
-        return true;
-    },
-    
-    // Remove a unit from comparison
-    removeUnit: function(unitId) {
-        const initialCount = this.selectedUnits.length;
-        this.selectedUnits = this.selectedUnits.filter(u => u.name !== unitId);
-        
-        if (initialCount !== this.selectedUnits.length) {
-            this.updateComparisonUI();
-            showNotification(`Removed from comparison`, 'success');
-            return true;
-        }
-        return false;
-    },
-    
-    // Clear all units from comparison
-    clearAll: function() {
-        this.selectedUnits = [];
-        this.updateComparisonUI();
-        showNotification('Comparison cleared', 'success');
-    },
-    
-    // Check if a unit is in comparison
-    isComparing: function(unitId) {
-        return this.selectedUnits.some(u => u.name === unitId);
-    },
-    
-    // Update UI elements with current comparison state
-    updateComparisonUI: function() {
-        // Update the comparison indicator
-        const indicator = document.getElementById('comparisonIndicator');
-        if (indicator) {
-            indicator.textContent = this.selectedUnits.length;
-            
-            // Show/hide the indicator based on whether units are selected
-            if (this.selectedUnits.length > 0) {
-                indicator.classList.add('active');
-            } else {
-                indicator.classList.remove('active');
-            }
-        }
-        
-        // Update compare buttons on all unit cards
-        updateCompareButtons();
-    },
-    
-    // Show the comparison modal with selected units
-    showComparison: function() {
-        if (this.selectedUnits.length === 0) {
-            showNotification('Add units to compare first', 'error');
-            return;
-        }
-        
-        createComparisonModal(this.selectedUnits);
+    if (!name) {
+        showNotification('Please enter sector name', 'error');
+        return;
     }
+
+    // Prepare data for API
+    const sectorData = {
+        name,
+        position: { lat, lng }
+    };
+
+    // Show loading indication
+    showNotification('Creating sector...', 'success');
+    
+    // Send to API
+    api.sectors.create(sectorData)
+        .then(createdSector => {
+            // Add to local array
+            sectors.push(createdSector);
+            
+            // Ask to add to navigation
+            const addToNavPopup = L.popup({
+                className: 'nav-question-popup'
+            })
+            .setLatLng([lat, lng])
+            .setContent(`
+                <div class="popup-form">
+                    <h4>Add to Quick Navigation?</h4>
+                    <div class="popup-form-buttons">
+                        <button onclick="addToNavigation('${name}', ${lat}, ${lng}, true)" class="create-btn">
+                            <i class="fas fa-check"></i> Yes
+                        </button>
+                        <button onclick="closePopup()" class="cancel-btn">
+                            <i class="fas fa-times"></i> No
+                        </button>
+                    </div>
+                </div>
+            `)
+            .openOn(map);
+
+            showNotification('Sector created successfully', 'success');
+            
+            // Update search filters if the function exists
+            if (window.updateSearchFilters) {
+                window.updateSearchFilters();
+            }
+        })
+        .catch(error => {
+            console.error("Error creating sector:", error);
+            showNotification('Error creating sector', 'error');
+        });
 };
 
-// Add comparison indicator to the page
-function initializeComparisonSystem() {
-    // Create comparison button in fixed position
-    const comparisonButton = document.createElement('div');
-    comparisonButton.id = 'comparisonButton';
-    comparisonButton.className = 'comparison-button';
-    comparisonButton.innerHTML = `
-        <div class="comparison-icon">
-            <i class="fas fa-balance-scale"></i>
-            <span id="comparisonIndicator" class="comparison-indicator">0</span>
-        </div>
-        <span class="comparison-label">Compare</span>
-    `;
-    document.body.appendChild(comparisonButton);
+// This combined function will handle toggling the navigation menu
+function setupNavigationToggle() {
+    const navMenu = document.getElementById('navigationMenu');
+    const toggleNavBtn = document.getElementById('toggleNavMenu');
     
-    // Add click handler to show comparison modal
-    comparisonButton.addEventListener('click', function() {
-        comparisonSystem.showComparison();
-    });
-    
-    // Add compare buttons to all unit cards
-    updateCompareButtons();
-}
-
-// Update compare buttons on all unit cards
-function updateCompareButtons() {
-    // Find all unit cards in grid and add/update comparison buttons
-    document.querySelectorAll('.unit-card').forEach(card => {
-        const unitId = card.getAttribute('data-unit-id');
+    if (toggleNavBtn && navMenu) {
+        // Remove any existing event listeners by cloning the element
+        const newToggleBtn = toggleNavBtn.cloneNode(true);
+        toggleNavBtn.parentNode.replaceChild(newToggleBtn, toggleNavBtn);
         
-        // Remove existing compare button if any
-        const existingBtn = card.querySelector('.compare-btn');
-        if (existingBtn) existingBtn.remove();
-        
-        // Add the comparison button to card
-        const compareBtn = document.createElement('button');
-        compareBtn.classList.add('compare-btn');
-        
-        if (comparisonSystem.isComparing(unitId)) {
-            compareBtn.innerHTML = `<i class="fas fa-minus-circle"></i> Remove`;
-            compareBtn.classList.add('removing');
-            compareBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                comparisonSystem.removeUnit(unitId);
-            });
-        } else {
-            compareBtn.innerHTML = `<i class="fas fa-plus-circle"></i> Compare`;
-            compareBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                comparisonSystem.addUnit(unitId);
-            });
-        }
-        
-        // Add to card
-        const cardFooter = card.querySelector('.unit-card-footer');
-        cardFooter.appendChild(compareBtn);
-    });
-}
-
-// Create comparison modal with detailed comparison view
-function createComparisonModal(unitsToCompare) {
-    // Remove existing modal if any
-    const existingModal = document.querySelector('.comparison-modal');
-    if (existingModal) existingModal.remove();
-    
-    // Create the modal
-    const modal = document.createElement('div');
-    modal.className = 'comparison-modal';
-    
-    // Get all property keys for comparison
-    const allProperties = [
-        { key: 'name', label: 'Unit Name', icon: 'fa-tag' },
-        { key: 'type', label: 'Unit Type', icon: 'fa-home' },
-        { key: 'area', label: 'Area (m²)', icon: 'fa-ruler-combined', numeric: true },
-        { key: 'price', label: 'Price ($)', icon: 'fa-dollar-sign', numeric: true, format: true },
-        { key: 'availability', label: 'Status', icon: 'fa-check-circle' },
-        { key: 'buildingName', label: 'Building', icon: 'fa-building' }
-    ];
-    
-    // Generate the table for comparison
-    const tableHTML = `
-        <div class="comparison-content">
-            <div class="comparison-header">
-                <h2>Property Comparison</h2>
-                <div class="comparison-actions">
-                    <button id="printComparison" class="comparison-print-btn">
-                        <i class="fas fa-print"></i> Print
-                    </button>
-                    <button id="exportComparisonPDF" class="comparison-export-btn">
-                        <i class="fas fa-file-pdf"></i> Export PDF
-                    </button>
-                    <button id="closeComparison" class="comparison-close-btn">
-                        <i class="fas fa-times"></i>
-                    </button>
-                </div>
-            </div>
+        // Add the event listener to the new button
+        newToggleBtn.addEventListener('click', function(event) {
+            event.preventDefault();
+            event.stopPropagation();
+            console.log("Toggle button clicked - new handler");
+            navMenu.classList.toggle('collapsed');
             
-            <div class="comparison-table-container">
-                <table class="comparison-table">
-                    <thead>
-                        <tr>
-                            <th class="property-header">Property</th>
-                            ${unitsToCompare.map(unit => `
-                                <th class="unit-header">
-                                    <div class="unit-col-header">
-                                        <h3>${unit.name}</h3>
-                                        <button class="remove-from-comparison" data-unit="${unit.name}">
-                                            <i class="fas fa-times"></i>
-                                        </button>
-                                    </div>
-                                </th>
-                            `).join('')}
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${allProperties.map(prop => `
-                            <tr class="comparison-row ${prop.numeric ? 'numeric-row' : ''}">
-                                <td class="property-name">
-                                    <i class="fas ${prop.icon}"></i> ${prop.label}
-                                </td>
-                                ${unitsToCompare.map(unit => {
-                                    let value = unit[prop.key];
-                                    
-                                    // Format based on property type
-                                    if (prop.format && prop.key === 'price') {
-                                        value = '$' + Number(value).toLocaleString();
-                                    }
-                                    
-                                    if (prop.key === 'availability') {
-                                        return `<td class="property-value status-${value}">${value.charAt(0).toUpperCase() + value.slice(1)}</td>`;
-                                    }
-                                    
-                                    return `<td class="property-value">${value}</td>`;
-                                }).join('')}
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            </div>
-            
-            <div class="comparison-footer">
-                <h3>Differential Analysis</h3>
-                <div class="differential-analysis">
-                    ${generateDifferentialAnalysis(unitsToCompare)}
-                </div>
-            </div>
-        </div>
-    `;
-    
-    modal.innerHTML = tableHTML;
-    document.body.appendChild(modal);
-    
-    // Add event listeners
-    
-    // Close button
-    document.getElementById('closeComparison').addEventListener('click', function() {
-        modal.remove();
-    });
-    
-    // Remove individual unit buttons
-    document.querySelectorAll('.remove-from-comparison').forEach(btn => {
-        btn.addEventListener('click', function() {
-            const unitId = this.getAttribute('data-unit');
-            comparisonSystem.removeUnit(unitId);
-            
-            // If no units left, close the modal
-            if (comparisonSystem.selectedUnits.length === 0) {
-                modal.remove();
+            // Add a visual feedback for the toggle
+            if (navMenu.classList.contains('collapsed')) {
+                showNotification("Navigation menu hidden", "success");
             } else {
-                createComparisonModal(comparisonSystem.selectedUnits);
+                showNotification("Navigation menu visible", "success");
             }
         });
-    });
-    
-    // Print functionality
-    document.getElementById('printComparison').addEventListener('click', function() {
-        printComparison(unitsToCompare);
-    });
-    
-    // Export PDF
-    document.getElementById('exportComparisonPDF').addEventListener('click', function() {
-        exportComparisonToPDF(unitsToCompare);
-    });
-    
-    // Add click-outside functionality
-    modal.addEventListener('click', function(e) {
-        if (e.target === modal) {
-            modal.remove();
-        }
-    });
-    
-    // Apply highlight to best values
-    highlightBestValues();
+        console.log("Navigation toggle set up successfully");
+    } else {
+        console.error("Navigation elements not found:", { toggleNavBtn, navMenu });
+    }
 }
 
-// Generate differential analysis comparing properties
-function generateDifferentialAnalysis(unitsToCompare) {
-    if (unitsToCompare.length < 2) {
-        return '<p>Add at least two units to see comparison analysis</p>';
-    }
+// Initialize Search Functionality
+window.initializeSearch = function() {
+    console.log("Initializing search functionality");
     
-    // Calculate price per sq meter
-    const pricePerSqMeter = unitsToCompare.map(unit => {
-        const price = parseFloat(unit.price);
-        const area = parseFloat(unit.area);
-        return {
-            name: unit.name,
-            value: price / area,
-            priceDiff: 0,
-            areaDiff: 0
-        };
+    // Set up event listeners for search filters
+    document.getElementById('sectorFilter').addEventListener('change', function() {
+        updateGroupFilter();
+        window.renderUnitCards();
     });
     
-    // Calculate differences between the first unit and others
-    const baseUnit = unitsToCompare[0];
-    const basePrice = parseFloat(baseUnit.price);
-    const baseArea = parseFloat(baseUnit.area);
+    document.getElementById('groupFilter').addEventListener('change', function() {
+        updateBuildingFilter();
+        window.renderUnitCards();
+    });
     
-    for (let i = 1; i < unitsToCompare.length; i++) {
-        const currentPrice = parseFloat(unitsToCompare[i].price);
-        const currentArea = parseFloat(unitsToCompare[i].area);
-        
-        pricePerSqMeter[i].priceDiff = ((currentPrice - basePrice) / basePrice) * 100;
-        pricePerSqMeter[i].areaDiff = ((currentArea - baseArea) / baseArea) * 100;
+    document.getElementById('buildingFilter').addEventListener('change', function() {
+        window.renderUnitCards();
+    });
+    
+    document.getElementById('minPrice').addEventListener('input', debounce(window.renderUnitCards, 300));
+    document.getElementById('maxPrice').addEventListener('input', debounce(window.renderUnitCards, 300));
+    document.getElementById('minArea').addEventListener('input', debounce(window.renderUnitCards, 300));
+    document.getElementById('maxArea').addEventListener('input', debounce(window.renderUnitCards, 300));
+    
+    // Clear filters button
+    document.getElementById('clearFilters').addEventListener('click', function() {
+        clearAllFilters();
+        window.renderUnitCards();
+    });
+    
+    // Initial setup
+    window.updateSearchFilters();
+    window.renderUnitCards();
+    console.log("Search initialization complete");
+};
+
+// Update Filters
+window.updateSearchFilters = function() {
+    console.log("Updating search filters");
+    
+    // Get filter elements
+    const sectorFilter = document.getElementById('sectorFilter');
+    
+    // Clear previous options except the first one
+    while (sectorFilter.options.length > 1) {
+        sectorFilter.remove(1);
     }
     
-    return `
-        <div class="diff-analysis-grid">
-            <div class="diff-analysis-item">
-                <h4>Price per m²</h4>
-                <div class="diff-chart">
-                    ${pricePerSqMeter.map(item => `
-                        <div class="diff-bar-container">
-                            <div class="diff-bar-label">${item.name}</div>
-                            <div class="diff-bar" style="width: ${Math.min(100, item.value / 50 * 100)}%">
-                                $${item.value.toFixed(2)}/m²
-                            </div>
-                        </div>
-                    `).join('')}
+    // Get unique sectors
+    const uniqueSectors = [...new Set(sectors.map(sector => sector.name))];
+    
+    // Add sectors to filter
+    uniqueSectors.forEach(sectorName => {
+        const option = document.createElement('option');
+        option.value = sectorName;
+        option.textContent = sectorName;
+        sectorFilter.appendChild(option);
+    });
+    
+    // Update dependent filters
+    updateGroupFilter();
+    updateBuildingFilter();
+    console.log("Filters updated successfully");
+};
+
+// Update Group Filter based on selected Sector
+function updateGroupFilter() {
+    console.log("Updating group filter");
+    const sectorFilter = document.getElementById('sectorFilter');
+    const groupFilter = document.getElementById('groupFilter');
+    const selectedSector = sectorFilter.value;
+    
+    // Clear previous options except the first one
+    while (groupFilter.options.length > 1) {
+        groupFilter.remove(1);
+    }
+    
+    // Enable/disable based on sector selection
+    if (selectedSector) {
+        groupFilter.disabled = false;
+        
+        // Filter groups by selected sector
+        const filteredGroups = groups.filter(group => 
+            group.sectorName === selectedSector
+        );
+        
+        // Add filtered groups to the dropdown
+        filteredGroups.forEach(group => {
+            const option = document.createElement('option');
+            option.value = group.name;
+            option.textContent = group.name.split(' - ')[1] || group.name; // Show only the group part
+            groupFilter.appendChild(option);
+        });
+    } else {
+        groupFilter.disabled = true;
+    }
+}
+
+// Update Building Filter based on selected Group
+function updateBuildingFilter() {
+    console.log("Updating building filter");
+    const groupFilter = document.getElementById('groupFilter');
+    const buildingFilter = document.getElementById('buildingFilter');
+    const selectedGroup = groupFilter.value;
+    
+    // Clear previous options except the first one
+    while (buildingFilter.options.length > 1) {
+        buildingFilter.remove(1);
+    }
+    
+    // Enable/disable based on group selection
+    if (selectedGroup && !groupFilter.disabled) {
+        buildingFilter.disabled = false;
+        
+        // Filter buildings by selected group
+        const filteredBuildings = buildings.filter(building => 
+            building.groupName === selectedGroup
+        );
+        
+        // Add filtered buildings to the dropdown
+        filteredBuildings.forEach(building => {
+            const option = document.createElement('option');
+            option.value = building.name;
+            option.textContent = building.name.split(' - ')[1] || building.name; // Show only the building part
+            buildingFilter.appendChild(option);
+        });
+    } else {
+        buildingFilter.disabled = true;
+    }
+}
+
+// Clear all filters
+function clearAllFilters() {
+    console.log("Clearing all filters");
+    document.getElementById('sectorFilter').value = '';
+    document.getElementById('groupFilter').value = '';
+    document.getElementById('buildingFilter').value = '';
+    document.getElementById('minPrice').value = '';
+    document.getElementById('maxPrice').value = '';
+    document.getElementById('minArea').value = '';
+    document.getElementById('maxArea').value = '';
+    
+    // Disable dependent filters
+    document.getElementById('groupFilter').disabled = true;
+    document.getElementById('buildingFilter').disabled = true;
+}
+
+// Render unit cards based on filters
+window.renderUnitCards = function() {
+    console.log("Rendering unit cards");
+    const unitGrid = document.getElementById('unitGrid');
+    const noUnitsMessage = document.getElementById('noUnitsMessage');
+    
+    // Get filter values
+    const selectedSector = document.getElementById('sectorFilter').value;
+    const selectedGroup = document.getElementById('groupFilter').value;
+    const selectedBuilding = document.getElementById('buildingFilter').value;
+    const minPrice = document.getElementById('minPrice').value ? parseFloat(document.getElementById('minPrice').value) : 0;
+    const maxPrice = document.getElementById('maxPrice').value ? parseFloat(document.getElementById('maxPrice').value) : Infinity;
+    const minArea = document.getElementById('minArea').value ? parseFloat(document.getElementById('minArea').value) : 0;
+    const maxArea = document.getElementById('maxArea').value ? parseFloat(document.getElementById('maxArea').value) : Infinity;
+    
+    // Filter units based on criteria
+    let filteredUnits = [...units];
+    
+    // Apply building filter if selected
+    if (selectedBuilding) {
+        filteredUnits = filteredUnits.filter(unit => unit.buildingName === selectedBuilding);
+    } 
+    // Apply group filter if selected (and building not selected)
+    else if (selectedGroup) {
+        // Get buildings in the selected group
+        const groupBuildings = buildings.filter(building => building.groupName === selectedGroup)
+            .map(building => building.name);
+        
+        // Filter units that belong to these buildings
+        filteredUnits = filteredUnits.filter(unit => groupBuildings.includes(unit.buildingName));
+    }
+    // Apply sector filter if selected (and neither building nor group selected)
+    else if (selectedSector) {
+        // Get groups in the selected sector
+        const sectorGroups = groups.filter(group => group.sectorName === selectedSector)
+            .map(group => group.name);
+        
+        // Get buildings in these groups
+        const sectorBuildings = buildings.filter(building => sectorGroups.includes(building.groupName))
+            .map(building => building.name);
+        
+        // Filter units that belong to these buildings
+        filteredUnits = filteredUnits.filter(unit => sectorBuildings.includes(unit.buildingName));
+    }
+    
+    // Apply price filter
+    filteredUnits = filteredUnits.filter(unit => {
+        const price = parseFloat(unit.price);
+        return price >= minPrice && price <= maxPrice;
+    });
+    
+    // Apply area filter
+    filteredUnits = filteredUnits.filter(unit => {
+        const area = parseFloat(unit.area);
+        return area >= minArea && area <= maxArea;
+    });
+    
+    // Clear the grid
+    unitGrid.innerHTML = '';
+    
+    // Show message if no units match
+    if (filteredUnits.length === 0) {
+        noUnitsMessage.style.display = 'flex';
+    } else {
+        noUnitsMessage.style.display = 'none';
+        
+        // Create and append unit cards
+        filteredUnits.forEach(unit => {
+            const unitCard = document.createElement('div');
+            unitCard.className = `unit-card ${unit.availability}`;
+            unitCard.innerHTML = `
+                <div class="unit-card-header">
+                    <h3>${unit.name}</h3>
+                    <span class="unit-type">${unit.type}</span>
                 </div>
-            </div>
-            
-            <div class="diff-analysis-item">
-                <h4>Relative to ${baseUnit.name}</h4>
-                <table class="diff-table">
-                    <thead>
-                        <tr>
-                            <th>Unit</th>
-                            <th>Price Diff</th>
-                            <th>Area Diff</th>
-                            <th>Value</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${pricePerSqMeter.slice(1).map(item => {
-                            const priceDiffClass = item.priceDiff > 0 ? 'higher' : 'lower';
-                            const areaDiffClass = item.areaDiff > 0 ? 'higher' : 'lower';
-                            const valueDiff = (pricePerSqMeter[0].value - item.value) / pricePerSqMeter[0].value * 100;
-                            const valueClass = valueDiff > 0 ? 'better' : 'worse';
-                            
-                            return `
-                                <tr>
-                                    <td>${item.name}</td>
-                                    <td class="${priceDiffClass}">
-                                        ${item.priceDiff > 0 ? '+' : ''}${item.priceDiff.toFixed(1)}%
-                                    </td>
-                                    <td class="${areaDiffClass}">
-                                        ${item.areaDiff > 0 ? '+' : ''}${item.areaDiff.toFixed(1)}%
-                                    </td>
-                                    <td class="${valueClass}">
-                                        ${Math.abs(valueDiff).toFixed(1)}% ${valueDiff > 0 ? 'better' : 'worse'}
-                                    </td>
-                                </tr>
-                            `;
-                        }).join('')}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        
-        <div class="comparison-recommendation">
-            <h4>Recommendation</h4>
-            <div class="recommendation-content">
-                ${generateRecommendation(unitsToCompare, pricePerSqMeter)}
-            </div>
-        </div>
-    `;
-}
+                <div class="unit-card-body">
+                    <p><i class="fas fa-building"></i> ${unit.buildingName}</p>
+                    <p><i class="fas fa-ruler-combined"></i> ${unit.area} m²</p>
+                    <p><i class="fas fa-tag"></i> $${Number(unit.price).toLocaleString()}</p>
+                    <p><i class="fas fa-check-circle"></i> Status: <span class="status-${unit.availability}">${unit.availability.charAt(0).toUpperCase() + unit.availability.slice(1)}</span></p>
+                </div>
+                <div class="unit-card-footer">
+                    <button onclick="showUnitDetails('${unit.name}', ${unit.position.lat}, ${unit.position.lng})" class="view-details-btn">
+                        <i class="fas fa-info-circle"></i> Details
+                    </button>
+                    <button onclick="navigateToUnit('${unit.name}', ${unit.position.lat}, ${unit.position.lng})" class="navigate-btn">
+                        <i class="fas fa-map-marker-alt"></i> Locate
+                    </button>
+                </div>
+            `;
+            unitGrid.appendChild(unitCard);
+        });
+    }
+    console.log(`Rendered ${filteredUnits.length} unit cards`);
+};
 
-// Generate intelligent recommendation based on comparison data
-function generateRecommendation(units, priceData) {
-    // Find the best value (lowest price per m²)
-    const bestValue = [...priceData].sort((a, b) => a.value - b.value)[0];
+// Navigate to a specific unit
+window.navigateToUnit = function(unitName, lat, lng) {
+    // Center map on unit with animation
+    map.flyTo([lat, lng], 5, {
+        animate: true,
+        duration: 1
+    });
     
-    // Find most spacious
-    const mostSpacious = [...units].sort((a, b) => parseFloat(b.area) - parseFloat(a.area))[0];
-    
-    // Find most affordable
-    const mostAffordable = [...units].sort((a, b) => parseFloat(a.price) - parseFloat(b.price))[0];
-    
-    // Find availability
-    const availableUnits = units.filter(unit => unit.availability === 'available');
-    
-    let recommendation = '';
-    
-    // Generate recommendation based on value, space, price and availability
-    if (availableUnits.length === 0) {
-        recommendation = `<p>None of the compared units are currently available. Consider exploring other options or contact management for waitlist information.</p>`;
-    } else {
-        recommendation = `<p>Based on your comparison:</p><ul>`;
-        
-        // Best value recommendation
-        recommendation += `<li><strong>${bestValue.name}</strong> offers the best value at $${bestValue.value.toFixed(2)}/m²</li>`;
-        
-        // Most spacious
-        if (mostSpacious.availability === 'available') {
-            recommendation += `<li><strong>${mostSpacious.name}</strong> provides the most space at ${mostSpacious.area} m²</li>`;
-        }
-        
-        // Most affordable
-        if (mostAffordable.availability === 'available') {
-            recommendation += `<li><strong>${mostAffordable.name}</strong> is the most affordable option at $${Number(mostAffordable.price).toLocaleString()}</li>`;
-        }
-        
-        recommendation += `</ul>`;
-        
-        // Final suggestion based on best value
-        const bestUnit = units.find(u => u.name === bestValue.name);
-        if (bestUnit.availability === 'available') {
-            recommendation += `<p class="recommendation-highlight"><i class="fas fa-star"></i> <strong>${bestValue.name}</strong> appears to be the best overall choice considering price, area, and value.</p>`;
-        } else {
-            const bestAvailable = availableUnits.sort((a, b) => {
-                const aValue = parseFloat(a.price) / parseFloat(a.area);
-                const bValue = parseFloat(b.price) / parseFloat(b.area);
-                return aValue - bValue;
-            })[0];
-            
-            recommendation += `<p class="recommendation-highlight"><i class="fas fa-star"></i> <strong>${bestAvailable.name}</strong> appears to be the best available option.</p>`;
-        }
+    // Remove previous indicator if exists
+    if (currentIndicator) {
+        map.removeLayer(currentIndicator);
     }
     
-    return recommendation;
-}
-
-// Highlight best values in the comparison table
-function highlightBestValues() {
-    // Find all numeric rows
-    const numericRows = document.querySelectorAll('.numeric-row');
+    // Create indicator circle
+    currentIndicator = L.circle([lat, lng], {
+        color: '#e74c3c',
+        fillColor: '#e74c3c',
+        fillOpacity: 0.2,
+        radius: 15
+    }).addTo(map);
     
-    numericRows.forEach(row => {
-        const values = [];
-        const cells = row.querySelectorAll('.property-value');
-        
-        // Extract numeric values
-        cells.forEach(cell => {
-            const value = parseFloat(cell.textContent.replace(/[^\d.-]/g, ''));
-            values.push({ cell, value });
-        });
-        
-        // Determine if higher or lower is better (for price, lower is better)
-        const isPriceRow = row.textContent.includes('Price');
-        const isHigherBetter = !isPriceRow; // For area, higher is better
-        
-        // Find best value
-        let bestValue;
-        if (isHigherBetter) {
-            bestValue = Math.max(...values.map(v => v.value));
-        } else {
-            bestValue = Math.min(...values.map(v => v.value));
-        }
-        
-        // Highlight best value
-        values.forEach(item => {
-            if (item.value === bestValue) {
-                item.cell.classList.add('best-value');
-            }
-        });
-    });
-}
-
-// Print comparison function
-function printComparison(units) {
-    const printWindow = window.open('', '_blank');
-    
-    printWindow.document.write(`
-        <html>
-        <head>
-            <title>Property Comparison - ${units.map(u => u.name).join(' vs ')}</title>
-            <style>
-                body { font-family: Arial, sans-serif; padding: 20px; }
-                h1 { text-align: center; color: #2c3e50; }
-                table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-                th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
-                th { background-color: #f8f9fa; }
-                .status-available { color: #2ecc71; font-weight: bold; }
-                .status-not-available { color: #e74c3c; font-weight: bold; }
-                .best-value { background-color: #e8f7f0; font-weight: bold; }
-                .property-name { font-weight: bold; }
-                .recommendation { margin-top: 30px; padding: 15px; background: #f8f9fa; border-left: 4px solid #3498db; }
-                .footer { margin-top: 30px; text-align: center; font-size: 12px; color: #7f8c8d; }
-            </style>
-        </head>
-        <body>
-            <h1>Property Comparison</h1>
-            
-            <table>
-                <thead>
-                    <tr>
-                        <th>Property</th>
-                        ${units.map(unit => `<th>${unit.name}</th>`).join('')}
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td class="property-name">Type</td>
-                        ${units.map(unit => `<td>${unit.type}</td>`).join('')}
-                    </tr>
-                    <tr>
-                        <td class="property-name">Area (m²)</td>
-                        ${units.map(unit => `<td>${unit.area}</td>`).join('')}
-                    </tr>
-                    <tr>
-                        <td class="property-name">Price ($)</td>
-                        ${units.map(unit => `<td>$${Number(unit.price).toLocaleString()}</td>`).join('')}
-                    </tr>
-                    <tr>
-                        <td class="property-name">Price per m²</td>
-                        ${units.map(unit => {
-                            const pricePerSqM = parseFloat(unit.price) / parseFloat(unit.area);
-                            return `<td>$${pricePerSqM.toFixed(2)}</td>`;
-                        }).join('')}
-                    </tr>
-                    <tr>
-                        <td class="property-name">Status</td>
-                        ${units.map(unit => `<td class="status-${unit.availability}">${unit.availability.charAt(0).toUpperCase() + unit.availability.slice(1)}</td>`).join('')}
-                    </tr>
-                    <tr>
-                        <td class="property-name">Building</td>
-                        ${units.map(unit => `<td>${unit.buildingName.split(' - ').pop()}</td>`).join('')}
-                    </tr>
-                </tbody>
-            </table>
-            
-            <div class="recommendation">
-                ${generatePrintRecommendation(units)}
-            </div>
-            
-            <div class="footer">
-                <p>Generated on ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}</p>
-                <p>Real Estate Map Application</p>
-            </div>
-        </body>
-        </html>
-    `);
-    
-    printWindow.document.close();
-    
-    // Wait for content to load before printing
+    // Open the popup
     setTimeout(() => {
-        printWindow.print();
-    }, 500);
-}
-
-// Export to PDF function (using window.print with custom styles)
-function exportComparisonToPDF(units) {
-    // For simplicity, using the same print function but with PDF filename
-    printComparison(units);
-}
-
-// Generate simplified recommendation for print view
-function generatePrintRecommendation(units) {
-    // Calculate price per m² for all units
-    const unitsWithValue = units.map(unit => {
-        const price = parseFloat(unit.price);
-        const area = parseFloat(unit.area);
-        return {
-            ...unit,
-            pricePerSqm: price / area
-        };
-    });
-    
-    // Sort by value (price per m²)
-    unitsWithValue.sort((a, b) => a.pricePerSqm - b.pricePerSqm);
-    
-    // Generate recommendation text
-    let recommendation = '<h3>Recommendation</h3>';
-    
-    const bestValue = unitsWithValue[0];
-    const available = unitsWithValue.filter(u => u.availability === 'available');
-    
-    if (available.length === 0) {
-        recommendation += `<p>None of the compared units are currently available.</p>`;
-    } else {
-        const bestAvailable = available.sort((a, b) => a.pricePerSqm - b.pricePerSqm)[0];
-        
-        recommendation += `<p>Based on the comparison:</p>`;
-        recommendation += `<ul>`;
-        recommendation += `<li><strong>${bestValue.name}</strong> offers the best value at $${bestValue.pricePerSqm.toFixed(2)}/m²</li>`;
-        
-        if (bestValue.availability !== 'available') {
-            recommendation += `<li><strong>${bestAvailable.name}</strong> is the best available option at $${bestAvailable.pricePerSqm.toFixed(2)}/m²</li>`;
+        const marker = unitMarkers.get(unitName);
+        if (marker) {
+            marker.openPopup();
         }
-        
-        recommendation += `</ul>`;
+    }, 1000);
+    
+    showNotification(`Navigating to Unit: ${unitName}`, 'success');
+};
+
+// Save Unit Edit Function
+window.saveUnitEdit = function(unitName, lat, lng) {
+    // Get values from edit form
+    const newBuildingName = document.getElementById('editUnitBuilding').value;
+    const newName = document.getElementById('editUnitName').value;
+    const newPrice = document.getElementById('editUnitPrice').value;
+    const newArea = document.getElementById('editUnitArea').value;
+    const newType = document.getElementById('editUnitType').value;
+    const newAvailability = document.getElementById('editUnitAvailability').value;
+    
+    // Validate form
+    if (!newBuildingName || !newName || !newPrice || !newArea || !newType) {
+        showNotification('Please fill all fields', 'error');
+        return;
     }
     
-    return recommendation;
-}
+    // Find unit index and ID
+    const unitIndex = units.findIndex(u => u.name === unitName && 
+                                      u.position.lat === lat && 
+                                      u.position.lng === lng);
+    
+    if (unitIndex === -1) {
+        showNotification('Unit not found', 'error');
+        return;
+    }
+    
+    const unitId = units[unitIndex].id;
+    const originalUnit = units[unitIndex];
+    
+    // Check if name has changed and if new name already exists (except for this unit)
+    if (newName !== originalUnit.name) {
+        const nameExists = units.some(u => u.name === newName && (u.position.lat !== lat || u.position.lng !== lng));
+        if (nameExists) {
+            showNotification('Unit name already exists', 'error');
+            return;
+        }
+    }
+    
+    // Prepare updated data for API
+    const updatedData = {
+        name: newName,
+        buildingName: newBuildingName,
+        type: newType,
+        area: newArea,
+        price: newPrice,
+        availability: newAvailability,
+        position: { lat, lng }
+    };
 
-// Modify the unit card rendering to include data-unit-id attribute
-document.querySelectorAll('.unit-card').forEach(card => {
-    const unitName = card.querySelector('h3').textContent;
-    card.setAttribute('data-unit-id', unitName);
-});
+    // Show loading notification
+    showNotification('Updating unit...', 'success');
+    
+    // Send update to API
+    api.units.update(unitId, updatedData)
+        .then(updatedUnit => {
+            // Remove the old marker if name has changed
+            if (originalUnit.name !== newName) {
+                const oldMarker = unitMarkers.get(originalUnit.name);
+                if (oldMarker) {
+                    map.removeLayer(oldMarker);
+                    unitMarkers.delete(originalUnit.name);
+                }
+            }
+            
+            // Update the unit in the array
+            units[unitIndex] = updatedUnit;
+            
+            // Create or update marker
+            const markerHTML = `
+                <div class="unit-marker ${newAvailability}">
+                    <span class="unit-label">${newName}</span>
+                </div>`;
+            
+            const markerIcon = L.divIcon({
+                html: markerHTML,
+                className: 'custom-marker',
+                iconSize: [30, 30],
+                iconAnchor: [15, 15],
+                popupAnchor: [0, -15]
+            });
+            
+            // Check if we need to create a new marker or update existing one
+            let marker;
+            if (originalUnit.name !== newName) {
+                // Create new marker
+                marker = L.marker([lat, lng], { icon: markerIcon }).addTo(map);
+                unitMarkers.set(newName, marker);
+            } else {
+                // Update existing marker
+                marker = unitMarkers.get(newName);
+                if (marker) {
+                    marker.setIcon(markerIcon);
+                }
+            }
+            
+            // Update marker popup
+            if (marker) {
+                marker.bindPopup(`
+                    <div class="unit-popup">
+                        <h3>${newName}</h3>
+                        <div class="popup-details">
+                            <p><i class="fas fa-building"></i> ${newBuildingName}</p>
+                            <p><i class="fas fa-home"></i> ${newType}</p>
+                            <p><i class="fas fa-ruler-combined"></i> ${newArea} m²</p>
+                            <p><i class="fas fa-tag"></i> $${Number(newPrice).toLocaleString()}</p>
+                            <p><i class="fas fa-check-circle"></i> Status: <span class="status-${newAvailability}">${newAvailability.charAt(0).toUpperCase() + newAvailability.slice(1)}</span></p>
+                        </div>
+                        <button onclick="showUnitDetails('${newName}', ${lat}, ${lng})" class="details-btn">
+                            View Details
+                        </button>
+                    </div>
+                `);
+            }
+            
+            // Close popup and show notification
+            map.closePopup();
+            showNotification('Unit updated successfully', 'success');
+            
+            // Update visibility and search results
+            updateMarkerVisibility();
+            
+            // Update unit list display
+            renderUnitList();
+            
+            // Update search results if available
+            if (window.renderUnitCards) {
+                window.renderUnitCards();
+            }
+        })
+        .catch(error => {
+            console.error("Error updating unit:", error);
+            showNotification('Error updating unit', 'error');
+        });
+};
 
-// Initialize the comparison system on page load
-document.addEventListener('DOMContentLoaded', function() {
-    initializeComparisonSystem();
-});
+// Delete Unit Function
+window.deleteUnit = function(unitName, lat, lng) {
+    // Find unit index and ID
+    const unitIndex = units.findIndex(u => u.name === unitName && 
+                                     u.position.lat === lat && 
+                                     u.position.lng === lng);
+    
+    if (unitIndex === -1) {
+        showNotification('Unit not found', 'error');
+        return;
+    }
+    
+    const unitId = units[unitIndex].id;
+    
+    // Confirm deletion
+    const confirmDelete = confirm(`Are you sure you want to delete unit "${unitName}"?`);
+    if (!confirmDelete) return;
+    
+    // Show loading indication
+    showNotification('Deleting unit...', 'success');
+    
+    // Delete from API
+    api.units.delete(unitId)
+        .then(deletedUnit => {
+            // Remove marker
+            const marker = unitMarkers.get(unitName);
+            if (marker) {
+                map.removeLayer(marker);
+                unitMarkers.delete(unitName);
+            }
+            
+            // Remove unit from array
+            units.splice(unitIndex, 1);
+            
+            // Close any open modals
+            document.querySelector('.unit-modal')?.remove();
+            
+            // Show notification
+            showNotification('Unit deleted successfully', 'success');
+            
+            // Update visibility and search results
+            updateMarkerVisibility();
+            
+            // Update unit list display
+            renderUnitList();
+            
+            // Update search results if available
+            if (window.renderUnitCards) {
+                window.renderUnitCards();
+            }
+        })
+        .catch(error => {
+            console.error("Error deleting unit:", error);
+            showNotification('Error deleting unit', 'error');
+        });
+};
 
-function updatePopupContent(unit) {
-    // Get the popup element
-    const popup = unit.marker.getPopup();
-
-    // Update the popup content
-    popup.setContent(`
-        <h3>${unit.name}</h3>
-        <p><i class="fas fa-building"></i> Building: ${unit.buildingName}</p>
-        <p><i class="fas fa-home"></i> Type: ${unit.type}</p>
-        <p><i class="fas fa-ruler-combined"></i> Area: ${unit.area} m²</p>
-        <p><i class="fas fa-tag"></i> Price: $${Number(unit.price).toLocaleString()}</p>
-        <p><i class="fas fa-check-circle"></i> Status: <span class="status-${unit.availability}">${unit.availability.charAt(0).toUpperCase() + unit.availability.slice(1)}</span></p>
-        <p><i class="fas fa-calculator"></i> Price per m²: $${(parseFloat(unit.price) / parseFloat(unit.area)).toFixed(2)}</p>
-    `);
+// Setup data export and import functionality
+function setupDataManagement() {
+    const exportBtn = document.getElementById('exportData');
+    const importBtn = document.getElementById('importData');
+    const importFile = document.getElementById('importFile');
+    
+    if (exportBtn) {
+        exportBtn.addEventListener('click', function() {
+            // Show loading notification
+            showNotification('Preparing data export...', 'success');
+            
+            // Get all data from API
+            api.export()
+                .then(data => {
+                    // Create downloadable file
+                    const dataStr = JSON.stringify(data, null, 2);
+                    const dataBlob = new Blob([dataStr], {type: 'application/json'});
+                    const url = URL.createObjectURL(dataBlob);
+                    
+                    // Create download link
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = `real_estate_map_${new Date().toISOString().split('T')[0]}.json`;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    
+                    showNotification('Data exported successfully', 'success');
+                })
+                .catch(error => {
+                    console.error("Error exporting data:", error);
+                    showNotification('Error exporting data', 'error');
+                });
+        });
+    }
+    
+    if (importBtn && importFile) {
+        importBtn.addEventListener('click', function() {
+            importFile.click();
+        });
+        
+        importFile.addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            // Confirm import
+            const confirmImport = confirm("Importing data will replace all existing data. Continue?");
+            if (!confirmImport) {
+                importFile.value = '';
+                return;
+            }
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    
+                    // Show loading notification
+                    showNotification('Importing data...', 'success');
+                    showLoadingSpinner();
+                    
+                    // Send to API
+                    api.import(data)
+                        .then(response => {
+                            // Reload all data
+                            loadAllData();
+                            showNotification('Data imported successfully', 'success');
+                        })
+                        .catch(error => {
+                            console.error("Error importing data:", error);
+                            showNotification('Error importing data', 'error');
+                            hideLoadingSpinner();
+                        });
+                } catch (error) {
+                    console.error("Error parsing import file:", error);
+                    showNotification('Invalid import file format', 'error');
+                }
+                
+                // Clear file input
+                importFile.value = '';
+            };
+            
+            reader.readAsText(file);
+        });
+    }
 }

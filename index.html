@@ -22,14 +22,90 @@
             <!-- Navigation buttons will be inserted here -->
         </div>
     </div>
-    
+
+    <!-- Add this new section -->
+    <div class="search-frame-container">
+        <div class="search-frame">
+            <div class="search-filters">
+                <div class="filter-group">
+                    <label for="sectorFilter">Sector:</label>
+                    <select id="sectorFilter">
+                        <option value="">All Sectors</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="groupFilter">Group:</label>
+                    <select id="groupFilter" disabled>
+                        <option value="">All Groups</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="buildingFilter">Building:</label>
+                    <select id="buildingFilter" disabled>
+                        <option value="">All Buildings</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="floorFilter">Floor:</label>
+                    <select id="floorFilter" disabled>
+                        <option value="">All Floors</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="sectionFilter">Section:</label>
+                    <select id="sectionFilter" disabled>
+                        <option value="">All Sections</option>
+                    </select>
+                </div>
+                <div class="filter-group range-filter">
+                    <label>Price Range:</label>
+                    <div class="range-inputs">
+                        <input type="number" id="minPrice" placeholder="Min Price" min="0">
+                        <span>to</span>
+                        <input type="number" id="maxPrice" placeholder="Max Price" min="0">
+                    </div>
+                </div>
+                <div class="filter-group range-filter">
+                    <label>Area Range (m²):</label>
+                    <div class="range-inputs">
+                        <input type="number" id="minArea" placeholder="Min Area" min="0">
+                        <span>to</span>
+                        <input type="number" id="maxArea" placeholder="Max Area" min="0">
+                    </div>
+                </div>
+                <button id="clearFilters" class="clear-filters-btn">
+                    <i class="fas fa-times"></i> Clear Filters
+                </button>
+            </div>
+            <div class="unit-grid-container">
+                <div id="unitGrid" class="unit-grid"></div>
+                <div id="noUnitsMessage" class="no-units-message" style="display: none;">
+                    <i class="fas fa-search"></i>
+                    <p>No units match your search criteria</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Units List with updated structure -->
     <div class="units-section">
         <h3>Added Units</h3>
         <ul id="unitList"></ul>
     </div>
+    
+    <!-- Data Management Buttons -->
+    <div class="data-management">
+        <button id="exportData" class="export-btn">
+            <i class="fas fa-download"></i> Export Data
+        </button>
+        <button id="importData" class="import-btn">
+            <i class="fas fa-upload"></i> Import Data
+        </button>
+        <input type="file" id="importFile" accept=".json" style="display: none;">
+    </div>
 
     <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script src="api.js"></script>
     <script src="script.js"></script>
 </body>
 </html>
