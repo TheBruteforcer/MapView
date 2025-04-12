@@ -5,9 +5,10 @@ This application provides an interactive map interface for managing real estate 
 ## Features
 
 - Interactive map visualization with Leaflet.js
-- Hierarchical organization: Sectors > Groups > Buildings > Units
+- Hierarchical organization: Sectors > Groups > Buildings > Floors > Sections > Units
+- Building-centric grid view to display units organized by floor and section
 - Quick navigation menu to jump to specific locations
-- Search and filter units by multiple criteria
+- Search and filter units by multiple criteria including floor and section
 - Data persistence with Flask API backend
 - Export and import functionality
 
@@ -33,7 +34,7 @@ pip install -r requirements.txt
 
 3. Start the Flask API server
 ```bash
-python app.py
+python3 app.py
 ```
 
 4. In a separate terminal, serve the frontend files
@@ -53,17 +54,18 @@ python -m http.server 8000
 - **Add Items**: Double-click anywhere on the map to add sectors, groups, buildings, or units
 - **Quick Navigation**: Use the navigation menu (toggle with the button in the top right)
 
+### Building & Unit Management
+
+- **Add Buildings**: Double-click on the map and select "Building"
+- **Specify Floors and Sections**: When creating a building, specify the number of floors and sections
+- **Grid View**: Click on any building to see a grid view of units organized by floor and section
+- **Add Units**: Click on any empty cell in the grid to add a unit to that specific floor and section
+- **View/Edit Units**: Click on any occupied cell to view or edit the unit details
+
 ### Data Management
 
 - **Export Data**: Click the "Export Data" button to download all data as JSON
 - **Import Data**: Click the "Import Data" button to upload previously exported data
-
-### Unit Management
-
-- **Add Units**: Double-click on the map and select "Unit"
-- **View Unit Details**: Click on any unit marker
-- **Edit Units**: Open unit details and click the "Edit" button
-- **Delete Units**: Open unit details and click the "Delete" button
 
 ### Search and Filter
 
@@ -71,6 +73,8 @@ python -m http.server 8000
   - Sector
   - Group
   - Building
+  - Floor
+  - Section
   - Price range
   - Area range
 

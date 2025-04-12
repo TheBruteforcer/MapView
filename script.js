@@ -14,6 +14,7 @@ var groups = [];
 var buildings = [];
 var sectors = [];
 var unitMarkers = new Map();
+var buildingMarkers = new Map(); // New map to store building markers
 var groupSummaryMarkers = new Map();
 var currentIndicator;
 var CLUSTER_ZOOM_THRESHOLD = 3;
@@ -107,7 +108,10 @@ function initializeMarkersFromData() {
     unitMarkers.forEach(marker => map.removeLayer(marker));
     unitMarkers.clear();
     
-    // Create unit markers
+    buildingMarkers.forEach(marker => map.removeLayer(marker));
+    buildingMarkers.clear();
+    
+    // Create unit markers but don't add them to the map yet
     units.forEach(unit => {
         const lat = unit.position.lat;
         const lng = unit.position.lng;
@@ -123,15 +127,10 @@ function initializeMarkersFromData() {
                 iconAnchor: [15, 15],
                 popupAnchor: [0, -15]
             }),
-        }).addTo(map);
+        });
         
-        // Store marker reference
+        // Store marker reference without adding to map
         unitMarkers.set(unit.name, marker);
-        
-        // Set initial visibility based on current zoom
-        if (map.getZoom() <= CLUSTER_ZOOM_THRESHOLD) {
-            marker.setOpacity(0);
-        }
         
         // Update popup content
         marker.bindPopup(`
@@ -139,6 +138,8 @@ function initializeMarkersFromData() {
                 <h3>${unit.name}</h3>
                 <div class="popup-details">
                     <p><i class="fas fa-building"></i> ${unit.buildingName}</p>
+                    <p><i class="fas fa-stairs"></i> Floor ${unit.floor || 'N/A'}</p>
+                    <p><i class="fas fa-door-open"></i> Section ${unit.section || 'N/A'}</p>
                     <p><i class="fas fa-home"></i> ${unit.type}</p>
                     <p><i class="fas fa-ruler-combined"></i> ${unit.area} m²</p>
                     <p><i class="fas fa-tag"></i> $${Number(unit.price).toLocaleString()}</p>
@@ -150,6 +151,9 @@ function initializeMarkersFromData() {
             </div>
         `);
     });
+    
+    // Create building markers instead
+    createBuildingMarkers();
     
     // Update visibility
     updateMarkerVisibility();
@@ -199,6 +203,13 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Setup export/import functionality
     setupDataManagement();
+    
+    // Initialize search filters
+    if (typeof initializeSearchFilters === 'function') {
+        initializeSearchFilters();
+    } else {
+        console.error("initializeSearchFilters function not defined");
+    }
     
     // Ensure map is properly initialized
     try {
@@ -518,6 +529,13 @@ window.showBuildingForm = function(lat, lng) {
             <div class="popup-form-group">
                 <input type="text" id="buildingName" placeholder="Building Name" required>
             </div>
+            <div class="popup-form-group">
+                <input type="number" id="buildingFloors" placeholder="Number of Floors" min="1" value="1" required>
+            </div>
+            <div class="popup-form-group">
+                <input type="text" id="buildingSections" placeholder="Sections (e.g. A,B,C)" required>
+                <small class="form-instruction">Separate sections with commas</small>
+            </div>
             <div class="popup-form-buttons">
                 <button onclick="createBuilding(${lat}, ${lng})" class="create-btn">
                     <i class="fas fa-plus"></i> Create
@@ -553,9 +571,19 @@ window.showUnitForm = function(lat, lng) {
         <div class="popup-form">
             <h4>Add New Unit</h4>
             <div class="popup-form-group">
-                <select id="unitBuilding" required>
+                <select id="unitBuilding" onchange="updateFloorAndSectionOptions()" required>
                     <option value="">Select Building</option>
                     ${buildingOptions}
+                </select>
+            </div>
+            <div class="popup-form-group">
+                <select id="unitFloor" disabled required>
+                    <option value="">Select Floor</option>
+                </select>
+            </div>
+            <div class="popup-form-group">
+                <select id="unitSection" disabled required>
+                    <option value="">Select Section</option>
                 </select>
             </div>
             <div class="popup-form-group">
@@ -588,6 +616,54 @@ window.showUnitForm = function(lat, lng) {
         </div>
     `)
     .openOn(map);
+};
+
+// Update floor and section options based on selected building
+window.updateFloorAndSectionOptions = function() {
+    const buildingName = document.getElementById('unitBuilding').value;
+    const floorSelect = document.getElementById('unitFloor');
+    const sectionSelect = document.getElementById('unitSection');
+    
+    // Reset and disable selects
+    floorSelect.innerHTML = '<option value="">Select Floor</option>';
+    sectionSelect.innerHTML = '<option value="">Select Section</option>';
+    floorSelect.disabled = true;
+    sectionSelect.disabled = true;
+    
+    if (!buildingName) {
+        return;
+    }
+    
+    // Find the selected building
+    const selectedBuilding = buildings.find(b => b.name === buildingName);
+    if (!selectedBuilding) {
+        return;
+    }
+    
+    // Populate floor options
+    if (selectedBuilding.floors) {
+        const floors = parseInt(selectedBuilding.floors);
+        for (let i = 1; i <= floors; i++) {
+            const option = document.createElement('option');
+            option.value = i;
+            option.textContent = `Floor ${i}`;
+            floorSelect.appendChild(option);
+        }
+        floorSelect.disabled = false;
+    }
+    
+    // Populate section options
+    if (selectedBuilding.sections && selectedBuilding.sections.length > 0) {
+        selectedBuilding.sections.forEach(section => {
+            if (section.trim()) {  // Only add non-empty sections
+                const option = document.createElement('option');
+                option.value = section.trim();
+                option.textContent = `Section ${section.trim()}`;
+                sectionSelect.appendChild(option);
+            }
+        });
+        sectionSelect.disabled = false;
+    }
 };
 
 // Create Group
@@ -659,8 +735,10 @@ window.createGroup = function(lat, lng) {
 window.createBuilding = function(lat, lng) {
     const groupName = document.getElementById('buildingGroup').value;
     const buildingName = document.getElementById('buildingName').value;
+    const buildingFloors = document.getElementById('buildingFloors').value;
+    const buildingSections = document.getElementById('buildingSections').value;
     
-    if (!groupName || !buildingName) {
+    if (!groupName || !buildingName || !buildingFloors || !buildingSections) {
         showNotification('Please fill all fields', 'error');
         return;
     }
@@ -671,7 +749,9 @@ window.createBuilding = function(lat, lng) {
     const buildingData = {
         name: fullName,
         groupName,
-        position: { lat, lng }
+        position: { lat, lng },
+        floors: buildingFloors,
+        sections: buildingSections.split(',')
     };
 
     // Show loading indication
@@ -716,12 +796,12 @@ function updateMarkerVisibility() {
 }
 
 function processLowZoom() {
-    // Step 1: Hide all unit markers by iterating over our unitMarkers Map
-    for (const [name, marker] of unitMarkers.entries()) {
+    // Hide all building markers by iterating over our buildingMarkers Map
+    for (const [name, marker] of buildingMarkers.entries()) {
         marker.setOpacity(0);
     }
     
-    // Step 2: Create group summary markers
+    // Create group summary markers
     setTimeout(() => {
         createGroupSummaries();
     }, 50);
@@ -731,14 +811,12 @@ function processHighZoom() {
     // Step 1: Remove all group summary markers
     removeGroupSummaries();
     
-    // Step 2: Show individual unit markers
+    // Step 2: Show building markers
     window._visibilityTimeout = setTimeout(() => {
-        for (const [name, marker] of unitMarkers.entries()) {
-            const unit = units.find(u => u.name === name);
-            if (unit && unit.availability === 'available') {
+        for (const [name, marker] of buildingMarkers.entries()) {
+            const building = buildings.find(b => b.name === name);
+            if (building) {
                 marker.setOpacity(1);
-            } else if (unit) {
-                marker.setOpacity(0.7); // Semi-transparent for non-available units
             }
         }
     }, 50);
@@ -824,21 +902,28 @@ function createGroupSummaries() {
 // Create Unit
 window.createUnit = function(lat, lng) {
     const buildingName = document.getElementById('unitBuilding').value;
+    const floor = document.getElementById('unitFloor').value;
+    const section = document.getElementById('unitSection').value;
     const name = document.getElementById('popupUnitName').value;
     const price = document.getElementById('popupUnitPrice').value;
     const area = document.getElementById('popupUnitArea').value;
     const type = document.getElementById('popupUnitType').value;
     const availability = document.getElementById('popupUnitAvailability').value;
 
-    if (!buildingName || !name || !price || !area || !type) {
+    if (!buildingName || !name || !price || !area || !type || !floor || !section) {
         showNotification('Please fill all fields', 'error');
         return;
     }
+
+    // Extract the building name for display
+    let displayBuildingName = getDisplayBuildingName(buildingName);
 
     // Prepare unit data for API
     const unitData = {
         name,
         buildingName,
+        floor,
+        section,
         type,
         area,
         price,
@@ -855,7 +940,7 @@ window.createUnit = function(lat, lng) {
             // Add to local array
             units.push(createdUnit);
             
-            // Create marker
+            // Create marker (but don't add to map)
             const marker = L.marker([lat, lng], {
                 icon: L.divIcon({
                     html: `
@@ -867,22 +952,19 @@ window.createUnit = function(lat, lng) {
                     iconAnchor: [15, 15],
                     popupAnchor: [0, -15]
                 }),
-            }).addTo(map);
+            });
 
             // Store marker in our Map for easier management
             unitMarkers.set(name, marker);
-
-            // Set initial visibility based on current zoom
-            if (map.getZoom() <= CLUSTER_ZOOM_THRESHOLD) {
-                marker.setOpacity(0); // Hide if we're at low zoom
-            }
 
             // Update popup content
             marker.bindPopup(`
                 <div class="unit-popup">
                     <h3>${name}</h3>
                     <div class="popup-details">
-                        <p><i class="fas fa-building"></i> ${buildingName}</p>
+                        <p><i class="fas fa-building"></i> ${displayBuildingName}</p>
+                        <p><i class="fas fa-stairs"></i> Floor ${floor}</p>
+                        <p><i class="fas fa-door-open"></i> Section ${section}</p>
                         <p><i class="fas fa-home"></i> ${type}</p>
                         <p><i class="fas fa-ruler-combined"></i> ${area} m²</p>
                         <p><i class="fas fa-tag"></i> $${Number(price).toLocaleString()}</p>
@@ -896,6 +978,9 @@ window.createUnit = function(lat, lng) {
 
             showNotification('Unit created successfully', 'success');
             map.closePopup();
+            
+            // Refresh building markers to update the grid
+            createBuildingMarkers();
             
             // Update visibility
             updateMarkerVisibility();
@@ -930,10 +1015,22 @@ map.on('zoomend', debouncedUpdate);
 });
 
 function renderUnitList() {
+    const unitList = document.getElementById('unitList');
+    if (!unitList) return;
+    
     unitList.innerHTML = '';
+    
+    if (units.length === 0) {
+        unitList.innerHTML = '<div class="no-units-message"><i class="fas fa-info-circle"></i><p>No units added yet</p></div>';
+        return;
+    }
+    
     units.forEach((unit, index) => {
+        // Extract the building name for display
+        let displayBuildingName = getDisplayBuildingName(unit.buildingName);
+        
         const li = document.createElement('li');
-        li.innerHTML = `<strong>${unit.name}</strong> - ${unit.type}, $${unit.price} 
+        li.innerHTML = `<strong>${unit.name}</strong> - ${displayBuildingName}, ${unit.type}, $${unit.price} 
             <button onclick="removeUnit(${index})">Remove</button>`;
         unitList.appendChild(li);
     });
@@ -1025,11 +1122,15 @@ function showNotification(message, type = 'success') {
     }, 100);
 }
 
+// Unit Details
 window.showUnitDetails = function(unitName, lat, lng) {
     const unit = units.find(u => u.name === unitName && 
                                u.position.lat === lat && 
                                u.position.lng === lng);
     if (!unit) return;
+
+    // Extract the building name for display
+    let displayBuildingName = getDisplayBuildingName(unit.buildingName);
 
     const modal = document.createElement('div');
     modal.className = 'unit-modal';
@@ -1043,7 +1144,7 @@ window.showUnitDetails = function(unitName, lat, lng) {
             </div>
             <div class="modal-body">
                 <div class="unit-info">
-                    <p><i class="fas fa-building"></i> Building: ${unit.buildingName}</p>
+                    <p><i class="fas fa-building"></i> Building: ${displayBuildingName}</p>
                     <p><i class="fas fa-home"></i> Type: ${unit.type}</p>
                     <p><i class="fas fa-ruler-combined"></i> Area: ${unit.area} m²</p>
                     <p><i class="fas fa-tag"></i> Price: $${Number(unit.price).toLocaleString()}</p>
@@ -1073,6 +1174,16 @@ window.editUnit = function(unitName, lat, lng) {
     // Close existing modal
     document.querySelector('.unit-modal')?.remove();
 
+    // Prepare building options with proper display names
+    const buildingOptions = buildings.map(building => {
+        // Extract the building name part
+        let displayName = getDisplayBuildingName(building.name);
+        
+        return `<option value="${building.name}" ${building.name === unit.buildingName ? 'selected' : ''}>
+            ${displayName}
+        </option>`;
+    }).join('');
+
     const popup = L.popup({
         className: 'unit-edit-popup'
     })
@@ -1082,11 +1193,7 @@ window.editUnit = function(unitName, lat, lng) {
             <h4>Edit Unit</h4>
             <div class="popup-form-group">
                 <select id="editUnitBuilding" required>
-                    ${buildings.map(building => `
-                        <option value="${building.name}" ${building.name === unit.buildingName ? 'selected' : ''}>
-                            ${building.name}
-                        </option>
-                    `).join('')}
+                    ${buildingOptions}
                 </select>
             </div>
             <div class="popup-form-group">
@@ -1327,12 +1434,27 @@ function updateBuildingFilter() {
     console.log("Updating building filter");
     const groupFilter = document.getElementById('groupFilter');
     const buildingFilter = document.getElementById('buildingFilter');
+    const floorFilter = document.getElementById('floorFilter');
+    const sectionFilter = document.getElementById('sectionFilter');
     const selectedGroup = groupFilter.value;
     
     // Clear previous options except the first one
     while (buildingFilter.options.length > 1) {
         buildingFilter.remove(1);
     }
+    
+    // Clear floor and section filters
+    while (floorFilter.options.length > 1) {
+        floorFilter.remove(1);
+    }
+    
+    while (sectionFilter.options.length > 1) {
+        sectionFilter.remove(1);
+    }
+    
+    // Disable dependent filters by default
+    floorFilter.disabled = true;
+    sectionFilter.disabled = true;
     
     // Enable/disable based on group selection
     if (selectedGroup && !groupFilter.disabled) {
@@ -1347,11 +1469,69 @@ function updateBuildingFilter() {
         filteredBuildings.forEach(building => {
             const option = document.createElement('option');
             option.value = building.name;
-            option.textContent = building.name.split(' - ')[1] || building.name; // Show only the building part
+            option.textContent = getDisplayBuildingName(building.name);
             buildingFilter.appendChild(option);
         });
     } else {
         buildingFilter.disabled = true;
+    }
+    
+    // Update floor and section filters
+    buildingFilter.onchange = updateFloorAndSectionFilters;
+}
+
+// Update Floor and Section Filters based on selected Building
+function updateFloorAndSectionFilters() {
+    console.log("Updating floor and section filters");
+    const buildingFilter = document.getElementById('buildingFilter');
+    const floorFilter = document.getElementById('floorFilter');
+    const sectionFilter = document.getElementById('sectionFilter');
+    const selectedBuilding = buildingFilter.value;
+    
+    // Clear previous options except the first one
+    while (floorFilter.options.length > 1) {
+        floorFilter.remove(1);
+    }
+    
+    while (sectionFilter.options.length > 1) {
+        sectionFilter.remove(1);
+    }
+    
+    // Disable by default
+    floorFilter.disabled = true;
+    sectionFilter.disabled = true;
+    
+    if (selectedBuilding && !buildingFilter.disabled) {
+        // Find the selected building
+        const building = buildings.find(b => b.name === selectedBuilding);
+        if (!building) return;
+        
+        // Enable filters
+        floorFilter.disabled = false;
+        sectionFilter.disabled = false;
+        
+        // Populate floor options
+        if (building.floors) {
+            const floors = parseInt(building.floors);
+            for (let i = 1; i <= floors; i++) {
+                const option = document.createElement('option');
+                option.value = i;
+                option.textContent = `Floor ${i}`;
+                floorFilter.appendChild(option);
+            }
+        }
+        
+        // Populate section options
+        if (building.sections && building.sections.length > 0) {
+            building.sections.forEach(section => {
+                if (section.trim()) {  // Only add non-empty sections
+                    const option = document.createElement('option');
+                    option.value = section.trim();
+                    option.textContent = `Section ${section.trim()}`;
+                    sectionFilter.appendChild(option);
+                }
+            });
+        }
     }
 }
 
@@ -1361,6 +1541,8 @@ function clearAllFilters() {
     document.getElementById('sectorFilter').value = '';
     document.getElementById('groupFilter').value = '';
     document.getElementById('buildingFilter').value = '';
+    document.getElementById('floorFilter').value = '';
+    document.getElementById('sectionFilter').value = '';
     document.getElementById('minPrice').value = '';
     document.getElementById('maxPrice').value = '';
     document.getElementById('minArea').value = '';
@@ -1369,6 +1551,8 @@ function clearAllFilters() {
     // Disable dependent filters
     document.getElementById('groupFilter').disabled = true;
     document.getElementById('buildingFilter').disabled = true;
+    document.getElementById('floorFilter').disabled = true;
+    document.getElementById('sectionFilter').disabled = true;
 }
 
 // Render unit cards based on filters
@@ -1381,6 +1565,8 @@ window.renderUnitCards = function() {
     const selectedSector = document.getElementById('sectorFilter').value;
     const selectedGroup = document.getElementById('groupFilter').value;
     const selectedBuilding = document.getElementById('buildingFilter').value;
+    const selectedFloor = document.getElementById('floorFilter').value;
+    const selectedSection = document.getElementById('sectionFilter').value;
     const minPrice = document.getElementById('minPrice').value ? parseFloat(document.getElementById('minPrice').value) : 0;
     const maxPrice = document.getElementById('maxPrice').value ? parseFloat(document.getElementById('maxPrice').value) : Infinity;
     const minArea = document.getElementById('minArea').value ? parseFloat(document.getElementById('minArea').value) : 0;
@@ -1416,6 +1602,16 @@ window.renderUnitCards = function() {
         filteredUnits = filteredUnits.filter(unit => sectorBuildings.includes(unit.buildingName));
     }
     
+    // Apply floor filter if selected
+    if (selectedFloor && !document.getElementById('floorFilter').disabled) {
+        filteredUnits = filteredUnits.filter(unit => unit.floor == selectedFloor);
+    }
+    
+    // Apply section filter if selected
+    if (selectedSection && !document.getElementById('sectionFilter').disabled) {
+        filteredUnits = filteredUnits.filter(unit => unit.section === selectedSection);
+    }
+    
     // Apply price filter
     filteredUnits = filteredUnits.filter(unit => {
         const price = parseFloat(unit.price);
@@ -1439,6 +1635,9 @@ window.renderUnitCards = function() {
         
         // Create and append unit cards
         filteredUnits.forEach(unit => {
+            // Extract the building name for display
+            let displayBuildingName = getDisplayBuildingName(unit.buildingName);
+            
             const unitCard = document.createElement('div');
             unitCard.className = `unit-card ${unit.availability}`;
             unitCard.innerHTML = `
@@ -1447,7 +1646,9 @@ window.renderUnitCards = function() {
                     <span class="unit-type">${unit.type}</span>
                 </div>
                 <div class="unit-card-body">
-                    <p><i class="fas fa-building"></i> ${unit.buildingName}</p>
+                    <p><i class="fas fa-building"></i> ${displayBuildingName}</p>
+                    <p><i class="fas fa-stairs"></i> Floor ${unit.floor || 'N/A'}</p>
+                    <p><i class="fas fa-door-open"></i> Section ${unit.section || 'N/A'}</p>
                     <p><i class="fas fa-ruler-combined"></i> ${unit.area} m²</p>
                     <p><i class="fas fa-tag"></i> $${Number(unit.price).toLocaleString()}</p>
                     <p><i class="fas fa-check-circle"></i> Status: <span class="status-${unit.availability}">${unit.availability.charAt(0).toUpperCase() + unit.availability.slice(1)}</span></p>
@@ -1469,8 +1670,22 @@ window.renderUnitCards = function() {
 
 // Navigate to a specific unit
 window.navigateToUnit = function(unitName, lat, lng) {
-    // Center map on unit with animation
-    map.flyTo([lat, lng], 5, {
+    // Find the unit details
+    const unit = units.find(u => u.name === unitName);
+    if (!unit) {
+        showNotification('Unit not found', 'error');
+        return;
+    }
+    
+    // Find the building
+    const building = buildings.find(b => b.name === unit.buildingName);
+    if (!building) {
+        showNotification('Building not found', 'error');
+        return;
+    }
+    
+    // Center map on building with animation
+    map.flyTo([building.position.lat, building.position.lng], 5, {
         animate: true,
         duration: 1
     });
@@ -1480,24 +1695,149 @@ window.navigateToUnit = function(unitName, lat, lng) {
         map.removeLayer(currentIndicator);
     }
     
-    // Create indicator circle
-    currentIndicator = L.circle([lat, lng], {
-        color: '#e74c3c',
-        fillColor: '#e74c3c',
+    // Create indicator circle around the building
+    currentIndicator = L.circle([building.position.lat, building.position.lng], {
+        color: '#3498db',
+        fillColor: '#3498db',
         fillOpacity: 0.2,
-        radius: 15
+        radius: 20
     }).addTo(map);
     
-    // Open the popup
-    setTimeout(() => {
-        const marker = unitMarkers.get(unitName);
-        if (marker) {
-            marker.openPopup();
-        }
-    }, 1000);
+    // Get the building marker and open its popup with the highlighted unit
+    const buildingMarker = buildingMarkers.get(building.name);
+    if (buildingMarker) {
+        setTimeout(() => {
+            // Create popup content with highlighted unit
+            const popupContent = createBuildingGridPopup(building, unitName);
+            buildingMarker.setPopupContent(popupContent);
+            buildingMarker.openPopup();
+        }, 1200);
+    }
     
-    showNotification(`Navigating to Unit: ${unitName}`, 'success');
+    showNotification(`Located Unit: ${unitName}`, 'success');
 };
+
+// Create a grid popup with highlighted unit
+function createBuildingGridPopupWithHighlight(building, highlightedUnit) {
+    console.log("Creating grid popup with highlight for unit:", highlightedUnit.name);
+    
+    // Get floors and sections with safe parsing
+    const floors = building && building.floors ? parseInt(building.floors) : 0;
+    let sections = [];
+    
+    // Handle different section formats
+    if (building && building.sections) {
+        if (Array.isArray(building.sections)) {
+            sections = building.sections;
+        } else if (typeof building.sections === 'string') {
+            sections = building.sections.split(',');
+        }
+    }
+    
+    // Extract display building name
+    const displayBuildingName = getDisplayBuildingName(building.name);
+    
+    // If no floors or sections, show error
+    if (floors === 0 || sections.length === 0) {
+        return `
+            <div class="building-popup">
+                <h3>${displayBuildingName}</h3>
+                <p>No floor or section data available</p>
+                <p>Make sure the building was created with floors and sections.</p>
+                <button onclick="editBuildingDetails('${building.name}')" class="edit-btn">
+                    <i class="fas fa-edit"></i> Edit Building
+                </button>
+            </div>
+        `;
+    }
+    
+    // Get units in this building
+    const buildingUnits = units.filter(unit => unit.buildingName === building.name);
+    
+    // Create grid header (sections)
+    let gridHeader = '<div class="grid-header"><div class="grid-cell floor-label">Floor</div>';
+    sections.forEach(section => {
+        let sectionName = section;
+        if (typeof section === 'object') {
+            sectionName = section.name || "Unknown";
+        }
+        gridHeader += `<div class="grid-cell section-label">Section ${sectionName.trim()}</div>`;
+    });
+    gridHeader += '</div>';
+    
+    // Create grid rows (floors)
+    let gridRows = '';
+    for (let floor = floors; floor >= 1; floor--) {  // Start from top floor
+        gridRows += `<div class="grid-row"><div class="grid-cell floor-label">Floor ${floor}</div>`;
+        
+        // Add cells for each section on this floor
+        sections.forEach(section => {
+            let sectionTrimmed = typeof section === 'string' ? section.trim() : 
+                                (section.name ? section.name.trim() : "Unknown");
+            
+            // Find unit in this floor and section
+            const unit = buildingUnits.find(u => 
+                parseInt(u.floor) === floor && u.section === sectionTrimmed);
+            
+            // Create cell based on whether unit exists
+            if (unit) {
+                // Check if this is the highlighted unit
+                const isHighlighted = (highlightedUnit && unit.name === highlightedUnit.name);
+                const highlightClass = isHighlighted ? 'highlighted-unit' : '';
+                
+                // Unit exists - show unit info
+                gridRows += `
+                    <div class="grid-cell unit-cell ${unit.availability} ${highlightClass}" 
+                         data-unit="${unit.name}"
+                         onclick="showUnitDetails('${unit.name}', ${unit.position.lat}, ${unit.position.lng})">
+                        <div class="cell-content">
+                            <div class="unit-name">${unit.name}</div>
+                            <div class="unit-price">$${Number(unit.price).toLocaleString()}</div>
+                            <div class="unit-area">${unit.area} m²</div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                // No unit - show add option
+                gridRows += `
+                    <div class="grid-cell empty-cell" onclick="showAddUnitForm(${building.position.lat}, ${building.position.lng}, '${building.name}', ${floor}, '${sectionTrimmed}')">
+                        <div class="add-unit-btn">
+                            <i class="fas fa-plus"></i>
+                            <span>Add Unit</span>
+                        </div>
+                    </div>
+                `;
+            }
+        });
+        
+        gridRows += '</div>';
+    }
+    
+    // Combine everything
+    return `
+        <div class="building-popup">
+            <h3>${displayBuildingName}</h3>
+            <div class="building-stats">
+                <div class="stat-item">
+                    <i class="fas fa-check-circle available"></i>
+                    <span>${buildingUnits.filter(u => u.availability === 'available').length} Available</span>
+                </div>
+                <div class="stat-item">
+                    <i class="fas fa-times-circle not-available"></i>
+                    <span>${buildingUnits.filter(u => u.availability === 'not-available').length} Not Available</span>
+                </div>
+                <div class="stat-item">
+                    <i class="fas fa-hashtag"></i>
+                    <span>${buildingUnits.length} Total Units</span>
+                </div>
+            </div>
+            <div class="building-grid">
+                ${gridHeader}
+                ${gridRows}
+            </div>
+        </div>
+    `;
+}
 
 // Save Unit Edit Function
 window.saveUnitEdit = function(unitName, lat, lng) {
@@ -1776,4 +2116,430 @@ function setupDataManagement() {
             reader.readAsText(file);
         });
     }
+}
+
+// Create Building Markers function
+function createBuildingMarkers() {
+    console.log("Creating building markers...");
+    
+    // Clear existing building markers
+    buildingMarkers.forEach(marker => map.removeLayer(marker));
+    buildingMarkers.clear();
+    
+    // Check if buildings array is populated
+    console.log(`Found ${buildings.length} buildings to create markers for`);
+    
+    // Create building markers
+    buildings.forEach(building => {
+        // Skip buildings without proper data
+        if (!building.position || !building.position.lat || !building.position.lng) {
+            console.log(`Skipping building ${building.name} due to missing position data`);
+            return;
+        }
+        
+        console.log(`Creating marker for building: ${building.name} at [${building.position.lat}, ${building.position.lng}]`);
+        
+        // Count units in this building
+        const buildingUnits = units.filter(unit => unit.buildingName === building.name);
+        const availableCount = buildingUnits.filter(unit => unit.availability === 'available').length;
+        const totalCount = buildingUnits.length;
+        
+        // Create marker
+        try {
+            const marker = L.marker([building.position.lat, building.position.lng], {
+                icon: L.divIcon({
+                    html: `
+                        <div class="unit-marker ${availableCount > 0 ? 'available' : 'not-available'}">
+                            <span class="unit-label"><i class="fas fa-building"></i></span>
+                        </div>`,
+                    className: 'custom-marker',
+                    iconSize: [40, 40],
+                    iconAnchor: [20, 20],
+                    popupAnchor: [0, -20]
+                }),
+            }).addTo(map);
+            
+            // Store marker reference
+            buildingMarkers.set(building.name, marker);
+            
+            // Bind popup with grid view
+            marker.bindPopup(createBuildingGridPopup(building), {
+                maxWidth: 500,
+                className: 'building-grid-popup'
+            });
+            
+            // Add click handler
+            marker.on('click', function() {
+                // Re-generate popup content when opened
+                this.setPopupContent(createBuildingGridPopup(building));
+            });
+            
+            console.log(`Successfully created marker for building: ${building.name}`);
+        } catch (error) {
+            console.error(`Error creating marker for building ${building.name}:`, error);
+        }
+    });
+    
+    console.log(`Created ${buildingMarkers.size} building markers`);
+}
+
+// Create a grid popup for a building
+function createBuildingGridPopup(building, highlightUnitName = null) {
+    console.log("Creating grid popup for building:", building);
+    
+    // Get floors and sections with safe parsing
+    const floors = building && building.floors ? parseInt(building.floors) : 0;
+    let sections = [];
+    
+    // Handle different section formats
+    if (building && building.sections) {
+        if (Array.isArray(building.sections)) {
+            sections = building.sections;
+        } else if (typeof building.sections === 'string') {
+            sections = building.sections.split(',');
+        }
+    }
+    
+    console.log(`Building has ${floors} floors and ${sections.length} sections`);
+    
+    // Extract display building name
+    const displayBuildingName = getDisplayBuildingName(building.name);
+    
+    // If no floors or sections, show error
+    if (floors === 0 || sections.length === 0) {
+        return `
+            <div class="building-popup">
+                <h3>${displayBuildingName}</h3>
+                <p>No floor or section data available</p>
+                <p>Make sure the building was created with floors and sections.</p>
+                <button onclick="editBuildingDetails('${building.name}')" class="edit-btn">
+                    <i class="fas fa-edit"></i> Edit Building
+                </button>
+            </div>
+        `;
+    }
+    
+    // Get units in this building
+    const buildingUnits = units.filter(unit => unit.buildingName === building.name);
+    
+    // Create grid header (sections)
+    let gridHeader = '<div class="grid-header"><div class="grid-cell floor-label">Floor</div>';
+    sections.forEach(section => {
+        let sectionName = section;
+        if (typeof section === 'object') {
+            sectionName = section.name || "Unknown";
+        }
+        gridHeader += `<div class="grid-cell section-label">Section ${sectionName.trim()}</div>`;
+    });
+    gridHeader += '</div>';
+    
+    // Create grid rows (floors)
+    let gridRows = '';
+    for (let floor = floors; floor >= 1; floor--) {  // Start from top floor
+        gridRows += `<div class="grid-row"><div class="grid-cell floor-label">Floor ${floor}</div>`;
+        
+        // Add cells for each section on this floor
+        sections.forEach(section => {
+            let sectionTrimmed = typeof section === 'string' ? section.trim() : 
+                                (section.name ? section.name.trim() : "Unknown");
+            
+            // Find unit in this floor and section
+            const unit = buildingUnits.find(u => 
+                parseInt(u.floor) === floor && u.section === sectionTrimmed);
+            
+            // Create cell based on whether unit exists
+            if (unit) {
+                // Check if this unit should be highlighted
+                const highlightClass = (highlightUnitName && unit.name === highlightUnitName) ? 'highlighted-unit' : '';
+                
+                // Unit exists - show unit info
+                gridRows += `
+                    <div class="grid-cell unit-cell ${unit.availability} ${highlightClass}" 
+                         data-unit="${unit.name}"
+                         data-floor="${floor}"
+                         data-section="${sectionTrimmed}"
+                         onclick="showUnitDetails('${unit.name}', ${unit.position.lat}, ${unit.position.lng})">
+                        <div class="cell-content">
+                            <div class="unit-name">${unit.name}</div>
+                            <div class="unit-price">$${Number(unit.price).toLocaleString()}</div>
+                            <div class="unit-area">${unit.area} m²</div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                // No unit - show add option
+                gridRows += `
+                    <div class="grid-cell empty-cell" onclick="showAddUnitForm(${building.position.lat}, ${building.position.lng}, '${building.name}', ${floor}, '${sectionTrimmed}')">
+                        <div class="add-unit-btn">
+                            <i class="fas fa-plus"></i>
+                            <span>Add Unit</span>
+                        </div>
+                    </div>
+                `;
+            }
+        });
+        
+        gridRows += '</div>';
+    }
+    
+    // Combine everything
+    return `
+        <div class="building-popup">
+            <h3>${displayBuildingName}</h3>
+            <div class="building-stats">
+                <div class="stat-item">
+                    <i class="fas fa-check-circle available"></i>
+                    <span>${buildingUnits.filter(u => u.availability === 'available').length} Available</span>
+                </div>
+                <div class="stat-item">
+                    <i class="fas fa-times-circle not-available"></i>
+                    <span>${buildingUnits.filter(u => u.availability === 'not-available').length} Not Available</span>
+                </div>
+                <div class="stat-item">
+                    <i class="fas fa-hashtag"></i>
+                    <span>${buildingUnits.length} Total Units</span>
+                </div>
+            </div>
+            <div class="building-grid">
+                ${gridHeader}
+                ${gridRows}
+            </div>
+        </div>
+    `;
+}
+
+// Show Add Unit Form with pre-selected building, floor, and section
+window.showAddUnitForm = function(lat, lng, buildingName, floor, section) {
+    map.closePopup();
+    
+    // Create the popup for unit creation with pre-filled values
+    const popup = L.popup({
+        className: 'unit-creation-popup'
+    })
+    .setLatLng([lat, lng])
+    .setContent(`
+        <div class="popup-form">
+            <h4>Add New Unit</h4>
+            <div class="popup-form-group">
+                <label>Building:</label>
+                <input type="text" id="unitBuilding" value="${buildingName}" readonly>
+            </div>
+            <div class="popup-form-group">
+                <label>Floor:</label>
+                <input type="text" id="unitFloor" value="${floor}" readonly>
+            </div>
+            <div class="popup-form-group">
+                <label>Section:</label>
+                <input type="text" id="unitSection" value="${section}" readonly>
+            </div>
+            <div class="popup-form-group">
+                <input type="text" id="popupUnitName" placeholder="Unit Name" required>
+            </div>
+            <div class="popup-form-group">
+                <input type="number" id="popupUnitPrice" placeholder="Unit Price" required>
+            </div>
+            <div class="popup-form-group">
+                <input type="number" id="popupUnitArea" placeholder="Unit Area (m²)" required>
+            </div>
+            <div class="popup-form-group">
+                <input type="text" id="popupUnitType" placeholder="Unit Type" required>
+            </div>
+            <div class="popup-form-group availability-toggle">
+                <label for="popupUnitAvailability">Availability:</label>
+                <select id="popupUnitAvailability">
+                    <option value="available">Available</option>
+                    <option value="not-available">Not Available</option>
+                </select>
+            </div>
+            <div class="popup-form-buttons">
+                <button onclick="createUnit(${lat}, ${lng})" class="create-btn">
+                    <i class="fas fa-plus"></i> Create
+                </button>
+                <button onclick="closePopup()" class="cancel-btn">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+            </div>
+        </div>
+    `)
+    .openOn(map);
+};
+
+// Initialize search filters and event handlers
+window.initializeSearchFilters = function() {
+    console.log("Initializing search filters and event handlers");
+    
+    // Get filter elements
+    const sectorFilter = document.getElementById('sectorFilter');
+    const groupFilter = document.getElementById('groupFilter');
+    const buildingFilter = document.getElementById('buildingFilter');
+    const floorFilter = document.getElementById('floorFilter');
+    const sectionFilter = document.getElementById('sectionFilter');
+    const clearFiltersBtn = document.getElementById('clearFilters');
+    
+    // Make sure elements exist before setting up event handlers
+    if (!sectorFilter || !groupFilter || !buildingFilter || !floorFilter || !sectionFilter) {
+        console.error("Filter elements not found");
+        return;
+    }
+    
+    // Add event listeners
+    sectorFilter.addEventListener('change', function() {
+        console.log("Sector filter changed");
+        updateGroupFilter();
+        renderUnitCards();
+    });
+    
+    groupFilter.addEventListener('change', function() {
+        console.log("Group filter changed");
+        updateBuildingFilter();
+        renderUnitCards();
+    });
+    
+    buildingFilter.addEventListener('change', function() {
+        console.log("Building filter changed");
+        updateFloorAndSectionFilters();
+        renderUnitCards();
+    });
+    
+    floorFilter.addEventListener('change', function() {
+        console.log("Floor filter changed");
+        renderUnitCards();
+    });
+    
+    sectionFilter.addEventListener('change', function() {
+        console.log("Section filter changed");
+        renderUnitCards();
+    });
+    
+    // Setup price and area range filters
+    document.getElementById('minPrice').addEventListener('input', debounce(renderUnitCards, 300));
+    document.getElementById('maxPrice').addEventListener('input', debounce(renderUnitCards, 300));
+    document.getElementById('minArea').addEventListener('input', debounce(renderUnitCards, 300));
+    document.getElementById('maxArea').addEventListener('input', debounce(renderUnitCards, 300));
+    
+    // Setup clear filters button
+    if (clearFiltersBtn) {
+        clearFiltersBtn.addEventListener('click', function() {
+            clearAllFilters();
+            renderUnitCards();
+        });
+    }
+    
+    // Populate initial filter values
+    updateSearchFilters();
+    
+    console.log("Search filter initialization complete");
+};
+
+// Edit Building Details function
+window.editBuildingDetails = function(buildingName) {
+    console.log(`Edit building: ${buildingName}`);
+    
+    // Find the building
+    const building = buildings.find(b => b.name === buildingName);
+    if (!building) {
+        showNotification('Building not found', 'error');
+        return;
+    }
+    
+    // Get display name
+    const displayBuildingName = getDisplayBuildingName(buildingName);
+    
+    // Close current popup if any
+    map.closePopup();
+    
+    // Simple implementation for now - just allow editing floors and sections
+    const popup = L.popup({
+        className: 'building-edit-popup'
+    })
+    .setLatLng([building.position.lat, building.position.lng])
+    .setContent(`
+        <div class="popup-form">
+            <h4>Edit Building Details</h4>
+            <div class="popup-form-group">
+                <label>Building Name:</label>
+                <input type="text" id="editBuildingName" value="${displayBuildingName}" disabled>
+            </div>
+            <div class="popup-form-group">
+                <label>Number of Floors:</label>
+                <input type="number" id="editBuildingFloors" value="${building.floors || 1}" min="1" required>
+            </div>
+            <div class="popup-form-group">
+                <label>Sections (comma separated):</label>
+                <input type="text" id="editBuildingSections" value="${Array.isArray(building.sections) ? building.sections.join(',') : building.sections || ''}" required>
+                <small class="form-instruction">Separate sections with commas (e.g. A,B,C)</small>
+            </div>
+            <div class="popup-form-buttons">
+                <button onclick="updateBuildingDetails('${building.name}')" class="create-btn">
+                    <i class="fas fa-save"></i> Save
+                </button>
+                <button onclick="closePopup()" class="cancel-btn">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+            </div>
+        </div>
+    `)
+    .openOn(map);
+};
+
+// Update Building Details function
+window.updateBuildingDetails = function(buildingName) {
+    // Find the building
+    const building = buildings.find(b => b.name === buildingName);
+    if (!building) {
+        showNotification('Building not found', 'error');
+        return;
+    }
+    
+    const floors = document.getElementById('editBuildingFloors').value;
+    const sectionsInput = document.getElementById('editBuildingSections').value;
+    
+    if (!floors || !sectionsInput) {
+        showNotification('Please fill all fields', 'error');
+        return;
+    }
+    
+    // Parse sections
+    const sections = sectionsInput.split(',').map(s => s.trim()).filter(s => s);
+    
+    // Update building data
+    const updatedData = {
+        ...building,
+        floors: parseInt(floors),
+        sections: sections
+    };
+    
+    // Show loading
+    showNotification('Updating building...', 'success');
+    
+    // Update via API
+    api.buildings.update(building.id || buildingName, updatedData)
+        .then(updatedBuilding => {
+            // Update local data
+            const index = buildings.findIndex(b => b.name === buildingName);
+            if (index !== -1) {
+                buildings[index] = updatedBuilding;
+            }
+            
+            showNotification('Building updated successfully', 'success');
+            map.closePopup();
+            
+            // Refresh building markers
+            createBuildingMarkers();
+        })
+        .catch(error => {
+            console.error('Error updating building:', error);
+            showNotification('Error updating building', 'error');
+        });
+};
+
+// Helper function to extract display building name
+function getDisplayBuildingName(fullBuildingName) {
+    // For building names with the format like "X-X-Building"
+    // Extract the last part after the last dash
+    const lastDashIndex = fullBuildingName.lastIndexOf('-');
+    if (lastDashIndex !== -1) {
+        return fullBuildingName.substring(lastDashIndex + 1).trim();
+    }
+    return fullBuildingName;
 }

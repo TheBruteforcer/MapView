@@ -166,6 +166,13 @@ def add_building():
     if 'id' not in data:
         data['id'] = f"building_{len(buildings) + 1}"
     
+    # Ensure floors and sections are included
+    if 'floors' not in data:
+        data['floors'] = 1
+    
+    if 'sections' not in data:
+        data['sections'] = []
+    
     buildings.append(data)
     write_json(BUILDINGS_FILE, buildings)
     return jsonify(data), 201
