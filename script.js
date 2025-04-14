@@ -1,5 +1,5 @@
 // Define the map image URL with error handling
-var mapImageUrl = 'map.jpg';
+var mapImageUrl = 'https://www.dropbox.com/scl/fi/zroe65zaj8n0bvrsyqtuh/map.jpg?rlkey=laalc7cw87hs9aeb2egsi72cl&st=9ll6muwg&raw=1';
 
 // Add unique ID generator
 function generateId() {
@@ -17,7 +17,7 @@ var unitMarkers = new Map();
 var buildingMarkers = new Map(); // New map to store building markers
 var groupSummaryMarkers = new Map();
 var currentIndicator;
-var CLUSTER_ZOOM_THRESHOLD = 3;
+var CLUSTER_ZOOM_THRESHOLD = 2;
 
 // Navigation positions dictionary
 var navigationPoints = {
@@ -35,6 +35,65 @@ const map = L.map('map', {
 
 // Log that map object was created
 console.log("Map object created:", map);
+
+// Open (or create) the database
+const request = indexedDB.open("MapImageDB", 1);
+
+request.onupgradeneeded = function(event) {
+    const db = event.target.result;
+    // Create an object store for the image
+    db.createObjectStore("images", { keyPath: "id" });
+};
+
+request.onsuccess = function(event) {
+    const db = event.target.result;
+    loadMapImage(db);
+};
+
+function loadMapImage(db) {
+    const transaction = db.transaction(["images"], "readonly");
+    const store = transaction.objectStore("images");
+    const getRequest = store.get("mapImage");
+
+    getRequest.onsuccess = function(event) {
+        if (event.target.result) {
+            // If the image is cached, use it
+            console.log("Using cached map image from IndexedDB");
+            addImageOverlayToMap(URL.createObjectURL(event.target.result.data));
+        } else {
+            // If not cached, download the image
+            console.log("Downloading map image");
+            const img = new Image();
+            img.crossOrigin = "Anonymous"; // Handle CORS if needed
+            img.onload = function() {
+                // Convert the image to a Blob
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                canvas.toBlob(function(blob) {
+                    // Store the Blob in IndexedDB
+                    const transaction = db.transaction(["images"], "readwrite");
+                    const store = transaction.objectStore("images");
+                    store.put({ id: "mapImage", data: blob });
+                    addImageOverlayToMap(URL.createObjectURL(blob));
+                });
+            };
+            img.onerror = function() {
+                console.error("Failed to load map image");
+                showNotification("Failed to load map image", "error");
+            };
+            img.src = mapImageUrl; // Ensure this URL is correct
+        }
+    };
+}
+
+// Function to add the image overlay to the map
+function addImageOverlayToMap(imageUrl) {
+    const bounds = [[0, 0], [500, 800]]; // Adjust bounds as necessary
+    L.imageOverlay(imageUrl, bounds).addTo(map);
+}
 
 try {
     // Define bounds and add image overlay
@@ -70,9 +129,11 @@ function loadAllData() {
         })
         .then(data => {
             units = data;
-            return api.navigation.getAll();
+            return api.navigation.getAll(); // Fetch navigation points
         })
         .then(data => {
+            console.log("Navigation points data:", data); // Log the API response
+            
             // Process navigation points
             navigationPoints = {'Main Entrance': { latlng: [0,0], label: 'Re-center map' }};
             data.forEach(navPoint => {
@@ -293,17 +354,22 @@ window.addToNavigation = function(name, lat, lng, isSector = false) {
     // Send to API
     api.navigation.create(navData)
         .then(createdNav => {
-            // Add the point to navigation points locally
-            navigationPoints[name] = {
-                latlng: [lat, lng],
-                label: name,
-                isSector: isSector
-            };
-            
-            // Update the navigation menu
-            renderNavigationMenu();
-            map.closePopup();
-            showNotification('Added to quick navigation', 'success');
+            // Check if the created navigation point is valid
+            if (createdNav && createdNav.name) {
+                // Add the point to navigation points locally
+                navigationPoints[createdNav.name] = {
+                    latlng: createdNav.position.latlng,
+                    label: createdNav.label,
+                    isSector: createdNav.isSector
+                };
+                
+                // Update the navigation menu
+                renderNavigationMenu();
+                map.closePopup();
+                showNotification('Added to quick navigation', 'success');
+            } else {
+                showNotification('Failed to add navigation point', 'error');
+            }
         })
         .catch(error => {
             console.error("Error adding to navigation:", error);
@@ -775,6 +841,7 @@ window.createBuilding = function(lat, lng) {
             console.error("Error creating building:", error);
             showNotification('Error creating building', 'error');
         });
+    loadAllData()
 };
 
 // Improved marker visibility management system

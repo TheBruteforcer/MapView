@@ -39,7 +39,7 @@
     padding: 15px;
     background-color: #f8f9fa;
     border-bottom: 1px solid #e9ecef;
-    align-items: center;
+    align-items: flex-start;
     gap: 15px;
 }
 
@@ -47,7 +47,7 @@
     display: flex;
     flex-direction: column;
     flex: 1;
-    min-width: 200px;
+    min-width: 150px; /* Reduced from 200px for better mobile layout */
 }
 
 .filter-group label {
@@ -64,6 +64,7 @@
     background-color: white;
     font-size: 14px;
     transition: border-color 0.2s;
+    width: 100%; /* Ensure select fills container */
 }
 
 .filter-group select:focus {
@@ -89,7 +90,8 @@
     display: flex;
     align-items: center;
     gap: 5px;
-    margin-top: 20px;
+    margin-top: auto; /* Align with the bottom of other filters */
+    align-self: flex-end;
 }
 
 .clear-filters-btn:hover {
@@ -99,12 +101,14 @@
 /* Unit Grid */
 .unit-grid-container {
     padding: 20px;
+    overflow: hidden; /* Prevent horizontal overflow */
 }
 
 .unit-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: 20px;
+    width: 100%;
 }
 
 .unit-card {
@@ -444,7 +448,152 @@ h3 {
     }
     
     h2 {
-        font-size: 2rem;
+        font-size: 1.8rem;
+    }
+    
+    /* Improved filter responsiveness */
+    .search-filters {
+        flex-direction: column;
+        gap: 10px;
+        padding: 10px;
+    }
+    
+    .filter-group {
+        width: 100%;
+        min-width: 100%;
+    }
+    
+    .range-filter {
+        width: 100%;
+        min-width: 100%;
+    }
+    
+    .range-inputs {
+        flex-direction: row;
+        width: 100%;
+    }
+    
+    .clear-filters-btn {
+        width: 100%;
+        margin-top: 10px;
+        justify-content: center;
+    }
+    
+    /* Unit grid improvements */
+    .unit-grid-container {
+        padding: 15px 10px;
+    }
+    
+    .unit-grid {
+        grid-template-columns: 1fr; /* Single column on mobile */
+    }
+    
+    /* Building grid popup improvements */
+    .building-grid {
+        max-height: 60vh;
+        overflow-x: auto;
+    }
+    
+    .building-grid-popup .leaflet-popup-content {
+        min-width: 300px;
+        max-width: 90vw;
+    }
+    
+    .search-frame-container {
+        padding: 0 5px;
+    }
+    
+    /* Improved filter elements for mobile */
+    .filter-group select,
+    .range-inputs input {
+        padding: 12px 10px; /* Taller height for better touch */
+        font-size: 16px; /* iOS minimum size to prevent zoom */
+    }
+    
+    /* Better spacing */
+    .search-filters {
+        padding: 12px;
+        gap: 15px;
+    }
+    
+    /* Better separation between filters */
+    .filter-group {
+        margin-bottom: 2px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid #eee;
+    }
+    
+    .filter-group:last-of-type {
+        border-bottom: none;
+    }
+    
+    /* Larger, more visible clear button */
+    .clear-filters-btn {
+        padding: 12px 15px;
+        margin-top: 15px;
+        font-size: 16px; 
+        font-weight: 600;
+    }
+    
+    /* Make everything more compact */
+    .filter-group label {
+        margin-bottom: 4px;
+    }
+    
+    /* More descriptive placeholders on small screens */
+    #minPrice::placeholder,
+    #minArea::placeholder {
+        color: #999;
+    }
+    
+    #maxPrice::placeholder,
+    #maxArea::placeholder {
+        color: #999;
+    }
+}
+
+/* For very small screens */
+@media (max-width: 480px) {
+    .range-inputs {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .range-inputs span {
+        text-align: center;
+        margin: 5px 0;
+    }
+    
+    .building-stats {
+        flex-direction: column;
+        gap: 10px;
+    }
+    
+    .stat-item {
+        justify-content: center;
+    }
+    
+    /* Even more vertical layout */
+    .range-inputs {
+        flex-direction: column;
+        gap: 8px;
+    }
+    
+    .range-inputs input {
+        width: 100%;
+    }
+    
+    .range-inputs span {
+        display: none; /* Hide the "to" text on very small screens */
+    }
+    
+    /* Add alternative labels */
+    .range-inputs input:first-child::placeholder {
+        content: "Min";
+    }
+    
+    .range-inputs input:last-child::placeholder {
+        content: "Max";
     }
 }
 
@@ -1236,19 +1385,21 @@ h3 {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 50px 20px;
+    padding: 40px 20px;
+    background-color: #f8f9fa;
+    border-radius: 8px;
     text-align: center;
-    color: #7f8c8d;
 }
 
 .no-units-message i {
     font-size: 3rem;
+    color: #ced4da;
     margin-bottom: 15px;
-    color: #bdc3c7;
 }
 
 .no-units-message p {
-    font-size: 1.2rem;
+    color: #6c757d;
+    font-size: 1.1rem;
     margin: 0;
 }
 
@@ -1333,13 +1484,14 @@ h3 {
 /* Range Filter Styles */
 .range-filter {
     flex: 2;
-    min-width: 300px;
+    min-width: 250px; /* Reduced from 300px for better mobile layout */
 }
 
 .range-inputs {
     display: flex;
     align-items: center;
     gap: 10px;
+    flex-wrap: wrap; /* Allow wrapping on very small screens */
 }
 
 .range-inputs input {
@@ -1349,6 +1501,7 @@ h3 {
     border-radius: 8px;
     font-size: 0.9rem;
     transition: all 0.3s ease;
+    min-width: 80px; /* Ensure inputs don't get too small */
 }
 
 .range-inputs input:focus {
